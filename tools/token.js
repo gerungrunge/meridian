@@ -141,7 +141,7 @@ export async function getTokenHolders({ mint, limit = 20 }) {
     total_fetched: holders.length,
     showing: mapped.length,
     top_10_real_holders_pct: top10Pct.toFixed(2),
-    total_bundlers_pct: totalBundlersPct.toFixed(4),
+    bundlers_pct_in_top_100: totalBundlersPct.toFixed(4),
     bundlers,
     holders: mapped,
   };
