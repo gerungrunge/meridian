@@ -30,7 +30,7 @@ tools/
   screening.js      Pool discovery from Meteora API
   wallet.js         SOL/token balances (Helius) + Jupiter swap
   token.js          Token info/holders/narrative (Jupiter API)
-  study.js          Top LPer study via LPAgent API
+  study.js          Top LPer study via LPAgent (routed through Agent Meridian relay)
 ```
 
 ---
@@ -204,6 +204,31 @@ Not required for normal operation.
 
 ---
 
+## Agent Meridian Relay (LPAgent)
+
+PnL, Top LP, and Study Top LP data is sourced from LPAgent, routed for free through Agent Meridian. No LPAgent API key needed on your side.
+
+**Config in `user-config.json`:**
+
+```json
+{
+  "publicApiKey": "bWVyaWRpYW4taXMtdGhlLWJlc3QtYWdlbnRz",
+  "agentMeridianApiUrl": "https://api.agentmeridian.xyz/api",
+  "lpAgentRelayEnabled": true
+}
+```
+
+**Current data flow:**
+- PnL → LPAgent via Agent Meridian
+- Top LP → LPAgent via Agent Meridian
+- Study Top LP → LPAgent via Agent Meridian
+- Open positions / zap-out can use Agent Meridian relay
+- Deploy still uses local SDK path
+
+**Privacy note:** Agent Meridian server does not store your data. It only bridges your agent to the LPAgent API.
+
+---
+
 ## Chart Indicators (chart-indicators.js)
 
 Optional confirmation logic that fetches RSI, Bollinger Bands, Supertrend, and Fibonacci data from the Agent Meridian API. Used as entry/exit timing confirmation — not a full strategy replacement.
@@ -251,6 +276,7 @@ Optional confirmation logic that fetches RSI, Bollinger Bands, Supertrend, and F
 | `HIVE_MIND_URL` | No | Collective intelligence server |
 | `HIVE_MIND_API_KEY` | No | Hive mind auth token |
 | `HELIUS_API_KEY` | No | Enhanced wallet balance data |
+| `LPAGENT_API_KEY` | No | Direct LPAgent access (not needed when `lpAgentRelayEnabled: true`) |
 
 ---
 

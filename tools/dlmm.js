@@ -396,6 +396,11 @@ let _positionsInflight = null; // deduplicates concurrent calls
 const LPAGENT_API = "https://api.lpagent.io/open-api/v1";
 
 async function fetchLpAgentOpenPositions(walletAddress) {
+  // Route through Agent Meridian relay when enabled (no LPAgent key needed)
+  if (config.lpAgentRelayEnabled) {
+    return fetchLpAgentViaRelay(walletAddress);
+  }
+  // Direct LPAgent fallback (requires LPAGENT_API_KEY)
   if (!process.env.LPAGENT_API_KEY) return {};
 
   const url = `${LPAGENT_API}/lp-positions/opening?owner=${walletAddress}`;
@@ -420,6 +425,42 @@ async function fetchLpAgentOpenPositions(walletAddress) {
     return byAddress;
   } catch (e) {
     log("lpagent_api", `Fetch error for owner ${walletAddress.slice(0, 8)}: ${e.message}`);
+    return {};
+  }
+}
+
+/**
+ * Fetch open LPAgent positions via the Agent Meridian relay.
+ * No LPAgent API key required — the relay bridges for free.
+ */
+async function fetchLpAgentViaRelay(walletAddress) {
+  const apiUrl = config.agentMeridianApiUrl;
+  const apiKey = config.publicApiKey;
+  if (!apiUrl || !apiKey) {
+    log("lpagent_relay", "Agent Meridian relay not configured — skipping LPAgent data");
+    return {};
+  }
+
+  const url = `${apiUrl}/relay/lpagent/lp-positions/opening?owner=${walletAddress}`;
+  try {
+    const res = await fetch(url, {
+      headers: { "x-api-key": apiKey },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      log("lpagent_relay", `HTTP ${res.status} for owner ${walletAddress.slice(0, 8)}: ${body.slice(0, 160)}`);
+      return {};
+    }
+    const data = await res.json();
+    const positions = data?.data || [];
+    const byAddress = {};
+    for (const p of positions) {
+      const addr = p.position || p.id || p.tokenId;
+      if (addr) byAddress[addr] = p;
+    }
+    return byAddress;
+  } catch (e) {
+    log("lpagent_relay", `Relay fetch error for owner ${walletAddress.slice(0, 8)}: ${e.message}`);
     return {};
   }
 }
@@ -451,12 +492,32 @@ async function fetchDlmmPnlForPool(poolAddress, walletAddress) {
   }
 }
 
-// ─── Get Position PnL (Meteora API) ─────────────────────────────
+// ─── Get Position PnL (LPAgent via relay or Meteora fallback) ───
 export async function getPositionPnl({ pool_address, position_address }) {
   pool_address = normalizeMint(pool_address);
   position_address = normalizeMint(position_address);
   const walletAddress = getWallet().publicKey.toString();
   try {
+    // Try LPAgent data (via relay or direct) first
+    const lpData = await fetchLpAgentPnlForPosition(walletAddress, position_address);
+    if (lpData) {
+      return {
+        pnl_usd:           Math.round(safeNum(lpData.pnl?.value) * 100) / 100,
+        pnl_pct:           Math.round(safeNum(lpData.pnl?.percent) * 100) / 100,
+        current_value_usd: Math.round(safeNum(lpData.value) * 100) / 100,
+        unclaimed_fee_usd: Math.round(safeNum(lpData.unCollectedFee) * 100) / 100,
+        all_time_fees_usd: Math.round(safeNum(lpData.collectedFee) * 100) / 100,
+        fee_per_tvl_24h:   null,
+        in_range:    lpData.isInRange ?? null,
+        lower_bin:   lpData.lowerBinId      ?? null,
+        upper_bin:   lpData.upperBinId      ?? null,
+        active_bin:  lpData.activeBinId     ?? null,
+        age_minutes: lpData.createdAt ? Math.floor((Date.now() - new Date(lpData.createdAt).getTime()) / 60000) : null,
+        source: "lpagent",
+      };
+    }
+
+    // Fallback to Meteora PnL API
     const byAddress = await fetchDlmmPnlForPool(pool_address, walletAddress);
     const p = byAddress[position_address];
     if (!p) return { error: "Position not found in PnL API" };
@@ -475,10 +536,24 @@ export async function getPositionPnl({ pool_address, position_address }) {
       upper_bin:   p.upperBinId      ?? null,
       active_bin:  p.poolActiveBinId ?? null,
       age_minutes: p.createdAt ? Math.floor((Date.now() - p.createdAt * 1000) / 60000) : null,
+      source: "meteora",
     };
   } catch (error) {
     log("pnl_error", error.message);
     return { error: error.message };
+  }
+}
+
+/**
+ * Fetch PnL for a single position via LPAgent (relay or direct).
+ * Returns the position data object, or null if not available.
+ */
+async function fetchLpAgentPnlForPosition(walletAddress, positionAddress) {
+  try {
+    const allPositions = await fetchLpAgentOpenPositions(walletAddress);
+    return allPositions[positionAddress] || null;
+  } catch {
+    return null;
   }
 }
 

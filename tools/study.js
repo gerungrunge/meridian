@@ -1,23 +1,23 @@
 import { getPriceOfBinByBinId } from "@meteora-ag/dlmm";
+import { config } from "../config.js";
 
 /**
  * Study top open LPers for a pool and extract behavioural patterns.
  * Used by the /learn command — not called on every cycle.
+ * Data sourced from LPAgent via Agent Meridian relay.
  */
-
-const AGENT_MERIDIAN_API = "https://api.agentmeridian.xyz/api";
-const AGENT_MERIDIAN_PUBLIC_KEY =
-  process.env.PUBLIC_API_KEY || "bWVyaWRpYW4taXMtdGhlLWJlc3QtYWdlbnRz";
 
 /**
  * Fetch top open LPers for a pool, filter to credible performers,
  * and return condensed behaviour patterns for LLM consumption.
  */
 export async function studyTopLPers({ pool_address, limit = 4 }) {
-  const headers = { "x-api-key": AGENT_MERIDIAN_PUBLIC_KEY };
+  const apiUrl = config.agentMeridianApiUrl;
+  const apiKey = config.publicApiKey;
+  const headers = { "x-api-key": apiKey };
   const [poolRes, signalRes] = await Promise.all([
-    fetch(`${AGENT_MERIDIAN_API}/pools/${pool_address}`, { headers }),
-    fetch(`${AGENT_MERIDIAN_API}/agent/pools/${pool_address}/signal`, { headers }),
+    fetch(`${apiUrl}/pools/${pool_address}`, { headers }),
+    fetch(`${apiUrl}/agent/pools/${pool_address}/signal`, { headers }),
   ]);
 
   if (!poolRes.ok) {
