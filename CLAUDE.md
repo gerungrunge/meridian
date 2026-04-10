@@ -97,6 +97,23 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 
 ---
 
+## Strict Profit Management (Deterministic Rules)
+
+Meridian enforces strict, non-negotiable exit rules that bypass the LLM manager to ensure safety and lock in profits:
+1. **Tiered Take-Profit**:
+   - `feeYieldEvalPct` (3%): Evaluate exit. Closes if volume is declining.
+   - `feeYieldClosePct` (5%): Immediate close. No exceptions.
+   - `feeYieldEmergencyPct` (8%): Emergency close.
+2. **IL Protection (`ilPriceMovePct`)**: If price moves > 15% from entry bin, calculate IL. If IL exceeds collected fees, close immediately.
+3. **Volume Decay Detection**:
+   - `volumeDecayAlertPct` (40%): Triggers high alert.
+   - `volumeDecayClosePct` (60%): Closes position immediately due to volume collapse.
+4. **Time-Based Stop**: Closes if open > `deadPoolMaxMinutes` (default 4h) with fee yield < `deadPoolMinYieldPct` (default 1%).
+
+These run in `getDeterministicCloseRule` and `updatePnlAndCheckExits`.
+
+---
+
 ## Position Lifecycle
 
 1. **Deploy**: `deploy_position` → executor safety checks → `trackPosition()` in state.js → Telegram notify

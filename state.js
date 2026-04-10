@@ -68,6 +68,8 @@ export function trackPosition({
   organic_score,
   initial_value_usd,
   signal_snapshot = null,
+  entry_volume = null,
+  entry_price = null,
 }) {
   const state = load();
   state.positions[position] = {
@@ -104,6 +106,11 @@ export function trackPosition({
     confirmed_trailing_exit_reason: null,
     confirmed_trailing_exit_until: null,
     trailing_active: false,
+    // Profit management tracking
+    entry_volume: entry_volume ?? null,
+    peak_volume: entry_volume ?? null,
+    entry_active_bin: active_bin ?? null,
+    entry_price: entry_price ?? null,
   };
   pushEvent(state, { action: "deploy", position, pool_name: pool_name || pool });
   save(state);
@@ -380,7 +387,7 @@ export function getStateSummary() {
  * Returns { action, reason } or null if no exit needed.
  */
 export function updatePnlAndCheckExits(position_address, positionData, mgmtConfig) {
-  const { pnl_pct: currentPnlPct, pnl_pct_suspicious, in_range, fee_per_tvl_24h } = positionData;
+  const { pnl_pct: currentPnlPct, pnl_pct_suspicious, in_range, fee_per_tvl_24h, trade_volume_24h, fee_yield_pct, age_minutes } = positionData;
   const state = load();
   const pos = state.positions[position_address];
   if (!pos || pos.closed) return null;
@@ -419,6 +426,74 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
 
   if (changed) save(state);
 
+  // ── Profit Management Updates ──────────────────────────────────────
+  if (trade_volume_24h != null && trade_volume_24h > 0) {
+    if (pos.peak_volume == null || trade_volume_24h > pos.peak_volume) {
+      pos.peak_volume = trade_volume_24h;
+      save(state);
+    }
+  }
+
+  // ── TIERED TAKE-PROFIT ──────────────────────────────────────────
+  if (fee_yield_pct != null) {
+    if (mgmtConfig.feeYieldEmergencyPct != null && fee_yield_pct >= mgmtConfig.feeYieldEmergencyPct) {
+      return { action: "EMERGENCY_CLOSE", reason: `Emergency close: Fee yield ${fee_yield_pct}% >= ${mgmtConfig.feeYieldEmergencyPct}%` };
+    }
+    if (mgmtConfig.feeYieldClosePct != null && fee_yield_pct >= mgmtConfig.feeYieldClosePct) {
+      return { action: "PROFIT_CLOSE", reason: `Take profit: Fee yield ${fee_yield_pct}% >= ${mgmtConfig.feeYieldClosePct}%` };
+    }
+    if (mgmtConfig.feeYieldEvalPct != null && fee_yield_pct >= mgmtConfig.feeYieldEvalPct) {
+      // Evaluate volume trend
+      if (pos.peak_volume != null && trade_volume_24h != null && pos.peak_volume > 0) {
+        if (trade_volume_24h < pos.peak_volume * 0.9) {
+          return { action: "PROFIT_CLOSE", reason: `Take profit: Fee yield ${fee_yield_pct}% >= ${mgmtConfig.feeYieldEvalPct}% AND volume declining` };
+        }
+      }
+    }
+  }
+
+  // ── VOLUME DECAY DETECTION ───────────────────────────────────────
+  if (pos.peak_volume != null && trade_volume_24h != null && pos.peak_volume > 0) {
+    const decayPct = ((pos.peak_volume - trade_volume_24h) / pos.peak_volume) * 100;
+    if (mgmtConfig.volumeDecayClosePct != null && decayPct >= mgmtConfig.volumeDecayClosePct) {
+      return { action: "DECAY_CLOSE", reason: `Volume decay: Dropped ${decayPct.toFixed(1)}% from peak >= limit ${mgmtConfig.volumeDecayClosePct}%` };
+    } else if (mgmtConfig.volumeDecayAlertPct != null && decayPct >= mgmtConfig.volumeDecayAlertPct) {
+      if (!pos.volume_alert_logged) {
+        log("state", `HIGH ALERT: Volume decay for ${position_address} dropped ${decayPct.toFixed(1)}% from peak.`);
+        pos.volume_alert_logged = true;
+        save(state);
+      }
+    }
+  }
+
+  // ── IL PROTECTION ────────────────────────────────────────────────
+  // Approximation of IL based on bin divergence
+  if (pos.entry_active_bin != null && positionData.active_bin != null && pos.entry_value_usd > 0) {
+    const binDiff = Math.abs(positionData.active_bin - pos.entry_active_bin);
+    const binStep = positionData.bin_step || 10;
+    const priceMovePct = binDiff * (binStep / 100); 
+    
+    if (mgmtConfig.ilPriceMovePct != null && priceMovePct >= mgmtConfig.ilPriceMovePct) {
+      // Estimate IL -> very simple approximation for pure price drift IL.
+      const collectedFees = positionData.collected_fees_true_usd || 0;
+      const unclaimedFees = positionData.unclaimed_fees_true_usd || 0;
+      const totalFees = collectedFees + unclaimedFees;
+      
+      const pnlLoss = currentPnlPct != null && currentPnlPct < 0 ? Math.abs(currentPnlPct / 100) * pos.entry_value_usd : 0;
+      
+      if (pnlLoss > totalFees) {
+        return { action: "IL_CLOSE", reason: `IL Protection: Price moved ${priceMovePct.toFixed(1)}% and IL ($${pnlLoss.toFixed(2)}) > Fees ($${totalFees.toFixed(2)})` };
+      }
+    }
+  }
+
+  // ── TIME-BASED STOP ──────────────────────────────────────────────
+  if (age_minutes != null && mgmtConfig.deadPoolMaxMinutes != null && age_minutes >= mgmtConfig.deadPoolMaxMinutes) {
+    if (fee_yield_pct != null && mgmtConfig.deadPoolMinYieldPct != null && fee_yield_pct < mgmtConfig.deadPoolMinYieldPct) {
+      return { action: "DEAD_POOL_CLOSE", reason: `Dead pool: held ${age_minutes}m > ${mgmtConfig.deadPoolMaxMinutes}m with ${fee_yield_pct}% yield < ${mgmtConfig.deadPoolMinYieldPct}%` };
+    }
+  }
+
   // ── Stop loss ──────────────────────────────────────────────────
   if (!pnl_pct_suspicious && currentPnlPct != null && mgmtConfig.stopLossPct != null && currentPnlPct <= mgmtConfig.stopLossPct) {
     return {
@@ -454,7 +529,6 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   }
 
   // ── Low yield (only after position has had time to accumulate fees) ───
-  const { age_minutes } = positionData;
   const minAgeForYieldCheck = mgmtConfig.minAgeBeforeYieldCheck ?? 60;
   if (
     fee_per_tvl_24h != null &&

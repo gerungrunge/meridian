@@ -80,6 +80,19 @@ export const config = {
     pnlSanityMaxDiffPct:   u.pnlSanityMaxDiffPct   ?? 5,    // max allowed diff between reported and derived pnl % before ignoring a tick
     // SOL mode — positions, PnL, and balances reported in SOL instead of USD
     solMode:               u.solMode               ?? false,
+    // ─── Strict Profit Management Rules ────────
+    // Tiered take-profit (fee yield thresholds)
+    feeYieldEvalPct:       u.feeYieldEvalPct       ?? 3,    // fee yield >= X% → evaluate exit
+    feeYieldClosePct:      u.feeYieldClosePct      ?? 5,    // fee yield >= X% → close immediately
+    feeYieldEmergencyPct:  u.feeYieldEmergencyPct  ?? 8,    // fee yield >= X% → emergency close
+    // Volume decay detection
+    volumeDecayAlertPct:   u.volumeDecayAlertPct   ?? 40,   // volume dropped X% from peak → alert
+    volumeDecayClosePct:   u.volumeDecayClosePct   ?? 60,   // volume dropped X% from peak → close
+    // IL protection
+    ilPriceMovePct:        u.ilPriceMovePct        ?? 15,   // price moved X% from entry → check IL
+    // Time-based stop
+    deadPoolMaxMinutes:    u.deadPoolMaxMinutes    ?? 240,  // 4 hours
+    deadPoolMinYieldPct:   u.deadPoolMinYieldPct   ?? 1,    // fee yield below X% = dead pool
   },
 
   // ─── Strategy Mapping ───────────────────

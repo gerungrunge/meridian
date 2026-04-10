@@ -743,6 +743,13 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
           pnl_pct:            (lpData || binData)
             ? Math.round(reportedPnlPct * 100) / 100
             : null,
+          fee_yield_pct:      tracked?.initial_value_usd > 0
+            ? Math.round(((
+                (lpData ? safeNum(lpData.collectedFee) : parseFloat(binData?.allTimeFees?.total?.usd || 0)) + 
+                (lpData ? safeNum(lpData.unCollectedFee) : (parseFloat(binData?.unrealizedPnl?.unclaimedFeeTokenX?.usd || 0) + parseFloat(binData?.unrealizedPnl?.unclaimedFeeTokenY?.usd || 0)))
+              ) / tracked.initial_value_usd) * 10000) / 100
+            : null,
+          entry_value_usd:    tracked?.initial_value_usd ?? null,
           pnl_pct_derived:    derivedPnlPct != null ? Math.round(derivedPnlPct * 100) / 100 : null,
           pnl_pct_diff:       pnlPctDiff != null ? Math.round(pnlPctDiff * 100) / 100 : null,
           pnl_pct_suspicious: !!pnlPctSuspicious,
@@ -754,6 +761,11 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
           fee_per_tvl_24h:    binData
             ? Math.round(parseFloat(binData.feePerTvl24h || 0) * 100) / 100
             : null,
+          trade_volume_24h:   binData ? parseFloat(binData.tradeVolume24h || 0) : null,
+          entry_volume:       tracked?.entry_volume ?? null,
+          peak_volume:        tracked?.peak_volume ?? null,
+          entry_price:        tracked?.entry_price ?? null,
+          active_price:       binData?.poolActiveBinId && binData?.binStep ? parseFloat(binData.binStep || 0) : null, // Not correct price calculation yet
           age_minutes:        binData?.createdAt ? Math.floor((Date.now() - binData.createdAt * 1000) / 60000) : ageFromState,
           minutes_out_of_range: minutesOutOfRange(positionAddress),
           instruction:        tracked?.instruction ?? null,
