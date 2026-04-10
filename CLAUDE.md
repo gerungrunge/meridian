@@ -20,6 +20,7 @@ telegram.js         Telegram bot: polling, notifications (deploy/close/swap/OOR)
 hive-mind.js        Optional collective intelligence server sync
 smart-wallets.js    KOL/alpha wallet tracker (smart-wallets.json)
 token-blacklist.js  Permanent token blacklist (token-blacklist.json)
+chart-indicators.js Chart indicator confirmation (RSI, Bollinger, Supertrend, Fibonacci) via Agent Meridian API
 logger.js           Daily-rotating log files + action audit trail
 
 tools/
@@ -203,6 +204,38 @@ Not required for normal operation.
 
 ---
 
+## Chart Indicators (chart-indicators.js)
+
+Optional confirmation logic that fetches RSI, Bollinger Bands, Supertrend, and Fibonacci data from the Agent Meridian API. Used as entry/exit timing confirmation — not a full strategy replacement.
+
+**Config in `user-config.json`:**
+
+```json
+{
+  "agentMeridianApiUrl": "https://api.agentmeridian.xyz/api",
+  "chartIndicators": {
+    "enabled": true,
+    "entryPreset": "supertrend_break",
+    "exitPreset": "supertrend_break",
+    "rsiLength": 2,
+    "intervals": ["5_MINUTE"],
+    "rsiOversold": 30,
+    "rsiOverbought": 80
+  }
+}
+```
+
+**Available presets:** `supertrend_break`, `rsi_reversal`, `bollinger_reversion`, `rsi_plus_supertrend`, `supertrend_or_rsi`, `bb_plus_rsi`, `fibo_reclaim`, `fibo_reject`
+
+**Behavioral notes:**
+- If indicator data is unavailable, agent falls back to old behavior automatically
+- Entry confirmation: added as `chart_indicators` line in screening candidate blocks
+- Exit confirmation: added as `chart_exit_signal` line in management action blocks
+- Indicators are fetched in parallel alongside existing recon (smart wallets, narrative, token info)
+- This is confirmation-only logic — hard rules (stop loss, trailing TP) always override
+
+---
+
 ## Environment Variables
 
 | Var | Required | Purpose |
@@ -225,3 +258,4 @@ Not required for normal operation.
 
 - `lessons.js evolveThresholds()` evolves `maxVolatility` + `minFeeTvlRatio` (wrong key names — should be `minFeeActiveTvlRatio`; `maxVolatility` doesn't exist in config at all). The evolution is a no-op for those keys.
 - `get_wallet_positions` tool (dlmm.js) is in definitions.js but not in MANAGER_TOOLS or SCREENER_TOOLS — only available in GENERAL role.
+

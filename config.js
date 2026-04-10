@@ -131,6 +131,20 @@ export const config = {
     agentId: u.agentId ?? null,
     pullMode: u.hiveMindPullMode ?? "auto",
   },
+
+  // ─── Agent Meridian API ──────────────
+  agentMeridianApiUrl: u.agentMeridianApiUrl ?? "https://api.agentmeridian.xyz/api",
+
+  // ─── Chart Indicators ────────────────
+  chartIndicators: {
+    enabled:       u.chartIndicators?.enabled       ?? false,
+    entryPreset:   u.chartIndicators?.entryPreset   ?? null,
+    exitPreset:    u.chartIndicators?.exitPreset     ?? null,
+    rsiLength:     u.chartIndicators?.rsiLength      ?? 14,
+    intervals:     u.chartIndicators?.intervals      ?? ["5_MINUTE"],
+    rsiOversold:   u.chartIndicators?.rsiOversold    ?? 30,
+    rsiOverbought: u.chartIndicators?.rsiOverbought  ?? 80,
+  },
 };
 
 /**

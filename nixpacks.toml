@@ -1,0 +1,19 @@
+# Nixpacks build configuration
+# Secrets are injected at RUNTIME by the deployment platform — NOT at build time.
+# In Dokploy/Railway: set WALLET_PRIVATE_KEY, LLM_API_KEY, TELEGRAM_BOT_TOKEN,
+# HELIUS_API_KEY, LPAGENT_API_KEY as runtime-only environment variables.
+
+[phases.setup]
+nixPkgs = ["nodejs_22", "npm-9_x"]
+
+[phases.install]
+cmds = ["npm ci --omit=dev"]
+
+# Non-secret build-time variables only
+[variables]
+NODE_ENV = "production"
+NIXPACKS_NO_CACHE = "1"
+
+[start]
+cmd = "node index.js"
+

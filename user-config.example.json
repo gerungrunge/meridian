@@ -86,5 +86,16 @@
   "telegramChatId": "",
   "hiveMindUrl": "",
   "hiveMindApiKey": "",
-  "hiveMindPullMode": "auto"
+  "hiveMindPullMode": "auto",
+
+  "agentMeridianApiUrl": "https://api.agentmeridian.xyz/api",
+  "chartIndicators": {
+    "enabled": false,
+    "entryPreset": "supertrend_break",
+    "exitPreset": "supertrend_break",
+    "rsiLength": 14,
+    "intervals": ["5_MINUTE"],
+    "rsiOversold": 30,
+    "rsiOverbought": 80
+  }
 }
