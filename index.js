@@ -23,7 +23,7 @@ import { appendDecision } from "./decision-log.js";
 
 log("startup", "DLMM LP Agent starting...");
 log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
-log("startup", `Model: ${process.env.LLM_MODEL || "hermes-3-405b"}`);
+log("startup", `Model: ${process.env.LLM_MODEL || "nousresearch/hermes-3-llama-3.1-405b"}`);
 ensureAgentId();
 bootstrapHiveMind().catch((error) => log("hivemind_warn", `Bootstrap failed: ${error.message}`));
 startHiveMindBackgroundSync();
