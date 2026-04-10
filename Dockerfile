@@ -7,7 +7,7 @@ COPY package.json package-lock.json ./
 COPY scripts/ ./scripts/
 
 # Install production dependencies only
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 # Copy application source
 COPY . .
