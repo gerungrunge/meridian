@@ -434,6 +434,10 @@ async function fetchLpAgentOpenPositions(walletAddress) {
  * No LPAgent API key required — the relay bridges for free.
  */
 async function fetchLpAgentViaRelay(walletAddress) {
+  // Failsafe: never hit the relay endpoint when the feature is disabled
+  if (!config.lpAgentRelayEnabled) {
+    return {};
+  }
   const apiUrl = config.agentMeridianApiUrl;
   const apiKey = config.publicApiKey;
   if (!apiUrl || !apiKey) {
