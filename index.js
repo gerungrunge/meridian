@@ -1,4 +1,11 @@
 import "dotenv/config";
+
+const originalEmitWarning = process.emitWarning;
+process.emitWarning = function(warning, type, code, ...args) {
+  if (code === "DEP0040" || (warning && typeof warning === 'string' && warning.includes("punycode"))) return;
+  return originalEmitWarning.call(process, warning, type, code, ...args);
+};
+
 import cron from "node-cron";
 import readline from "readline";
 import { agentLoop } from "./agent.js";
