@@ -139,9 +139,9 @@ export const config = {
 
   // ─── HiveMind ─────────────────────────
   hiveMind: {
-    url: u.hiveMindUrl ?? DEFAULT_HIVEMIND_URL,
-    apiKey: u.hiveMindApiKey ?? "",
-    agentId: u.agentId ?? null,
+    url: u.hiveMindUrl ?? process.env.HIVEMIND_URL ?? DEFAULT_HIVEMIND_URL,
+    apiKey: u.hiveMindApiKey ?? process.env.HIVEMIND_API_KEY ?? "",
+    agentId: u.agentId ?? process.env.AGENT_ID ?? null,
     pullMode: u.hiveMindPullMode ?? "auto",
   },
 

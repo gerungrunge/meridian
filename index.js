@@ -577,7 +577,7 @@ STEPS:
 1. Pick the best candidate based on narrative quality, smart wallets, pool metrics, and chart indicators (if available).
    - chart_indicators line: if present with entry ✅, it's a confirming signal. If ❌ or missing, proceed with normal judgment — indicators are optional.
 2. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
-   bins_below = round(35 + (volatility/5)*55) clamped to [35,90].
+   bins_below = round(35 + (volatility/5)*55) clamped to [35,${config.strategy.binsBelow}].
 3. Report in this exact format (no tables, no extra sections):
    🚀 DEPLOYED
 
@@ -966,7 +966,8 @@ async function deployLatestCandidate(index) {
     throw new Error("Invalid candidate index. Run /screen first.");
   }
   const deployAmount = computeDeployAmount((await getWalletBalances()).sol);
-  const binsBelow = Math.max(35, Math.min(90, Math.round(35 + ((Number(candidate.volatility) || 0) / 5) * 55)));
+  const maxBins = config.strategy.binsBelow;
+  const binsBelow = Math.max(35, Math.min(maxBins, Math.round(35 + ((Number(candidate.volatility) || 0) / 5) * 55)));
   const result = await executeTool("deploy_position", {
     pool_address: candidate.pool,
     amount_y: deployAmount,
