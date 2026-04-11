@@ -434,10 +434,9 @@ async function fetchLpAgentOpenPositions(walletAddress) {
  * No LPAgent API key required — the relay bridges for free.
  */
 async function fetchLpAgentViaRelay(walletAddress) {
-  // Failsafe: never hit the relay endpoint when the feature is disabled
-  if (!config.lpAgentRelayEnabled) {
-    return {};
-  }
+  // HARD DISABLED: The relay is currently offline for this version, return empty
+  // immediately to prevent log spam and 404 errors.
+  return {};
   const apiUrl = config.agentMeridianApiUrl;
   const apiKey = config.publicApiKey;
   if (!apiUrl || !apiKey) {
@@ -918,6 +917,8 @@ export async function closePosition({ position_address, reason }) {
   }
 
   const tracked = getTrackedPosition(position_address);
+  // Snapshot the position from cache before we close/refresh it
+  const preClosePosCache = _positionsCache?.positions?.find(p => p.position === position_address);
 
   try {
     log("close", `Closing position: ${position_address}`);
@@ -1096,18 +1097,17 @@ export async function closePosition({ position_address, reason }) {
       }
       // Fallback to pre-close cache snapshot if closed API had no data
       if (finalValueUsd === 0) {
-        const cachedPos = _positionsCache?.positions?.find(p => p.position === position_address);
-        if (cachedPos) {
-          pnlUsd        = cachedPos.pnl_true_usd ?? cachedPos.pnl_usd ?? 0;
-          pnlPct        = cachedPos.pnl_pct   ?? 0;
-          feesUsd       = (cachedPos.collected_fees_true_usd || 0) + (cachedPos.unclaimed_fees_true_usd || 0);
+        if (preClosePosCache) {
+          pnlUsd        = preClosePosCache.pnl_true_usd ?? preClosePosCache.pnl_usd ?? 0;
+          pnlPct        = preClosePosCache.pnl_pct   ?? 0;
+          feesUsd       = (preClosePosCache.collected_fees_true_usd || 0) + (preClosePosCache.unclaimed_fees_true_usd || 0);
           initialUsd    = tracked.initial_value_usd || 0;
           if (initialUsd > 0) {
             // Keep fallback internally consistent using USD-only cached metrics.
             finalValueUsd = Math.max(0, initialUsd + pnlUsd - feesUsd);
             pnlPct = (pnlUsd / initialUsd) * 100;
           } else {
-            finalValueUsd = cachedPos.total_value_true_usd ?? cachedPos.total_value_usd ?? 0;
+            finalValueUsd = preClosePosCache.total_value_true_usd ?? preClosePosCache.total_value_usd ?? 0;
             initialUsd = Math.max(0, finalValueUsd + feesUsd - pnlUsd);
           }
           log("close_warn", `Using cached pnl fallback because closed API has not settled yet`);

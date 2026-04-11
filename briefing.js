@@ -51,8 +51,11 @@ export async function generateBriefing() {
     "",
     `<b>Current Portfolio:</b>`,
     `📂 Open Positions: ${openPositions.length}`,
+    openPositions.length > 0
+      ? openPositions.map(p => `  • ${p.pool_name || p.pool?.slice(0, 8) || "Unknown"} (${p.amount_sol ? p.amount_sol + " SOL" : "?"})`).join("\n")
+      : "",
     perfSummary
-      ? `📊 All-time PnL: $${perfSummary.total_pnl_usd.toFixed(2)} (${perfSummary.win_rate_pct}% win)`
+      ? `\n📊 All-time PnL: $${perfSummary.total_pnl_usd.toFixed(2)} (${perfSummary.win_rate_pct}% win)`
       : "",
     "────────────────"
   ];

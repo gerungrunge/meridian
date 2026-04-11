@@ -148,7 +148,7 @@ export const config = {
   // ─── Agent Meridian API ──────────────
   publicApiKey: u.publicApiKey ?? process.env.PUBLIC_API_KEY ?? "bWVyaWRpYW4taXMtdGhlLWJlc3QtYWdlbnRz",
   agentMeridianApiUrl: u.agentMeridianApiUrl ?? "https://api.agentmeridian.xyz/api",
-  lpAgentRelayEnabled: u.lpAgentRelayEnabled ?? false,
+  lpAgentRelayEnabled: false, // FORCE OFF to prevent 404 logs even if set to true in stale user-configs
 
   // ─── Chart Indicators ────────────────
   chartIndicators: {

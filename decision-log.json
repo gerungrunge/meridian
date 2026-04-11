@@ -1,0 +1,88 @@
+{
+  "decisions": [
+    {
+      "id": "dec_1775894401102_84boum",
+      "ts": "2026-04-11T08:00:01.102Z",
+      "type": "skip",
+      "actor": "SCREENER",
+      "pool": null,
+      "pool_name": null,
+      "position": null,
+      "summary": "Screening skipped",
+      "reason": "Max positions reached (1/1)",
+      "risks": [],
+      "metrics": {},
+      "rejected": []
+    },
+    {
+      "id": "dec_1775894400936_k3l3tm",
+      "ts": "2026-04-11T08:00:00.936Z",
+      "type": "skip",
+      "actor": "SCREENER",
+      "pool": null,
+      "pool_name": null,
+      "position": null,
+      "summary": "Screening skipped",
+      "reason": "Max positions reached (1/1)",
+      "risks": [],
+      "metrics": {},
+      "rejected": []
+    },
+    {
+      "id": "dec_1775893502017_kvzs3c",
+      "ts": "2026-04-11T07:45:02.017Z",
+      "type": "skip",
+      "actor": "SCREENER",
+      "pool": null,
+      "pool_name": null,
+      "position": null,
+      "summary": "Screening skipped",
+      "reason": "Max positions reached (1/1)",
+      "risks": [],
+      "metrics": {},
+      "rejected": []
+    },
+    {
+      "id": "dec_1775893501979_8iza0f",
+      "ts": "2026-04-11T07:45:01.979Z",
+      "type": "skip",
+      "actor": "SCREENER",
+      "pool": null,
+      "pool_name": null,
+      "position": null,
+      "summary": "Screening skipped",
+      "reason": "Max positions reached (1/1)",
+      "risks": [],
+      "metrics": {},
+      "rejected": []
+    },
+    {
+      "id": "dec_1775892600632_pckz25",
+      "ts": "2026-04-11T07:30:00.632Z",
+      "type": "skip",
+      "actor": "SCREENER",
+      "pool": null,
+      "pool_name": null,
+      "position": null,
+      "summary": "Screening skipped",
+      "reason": "Max positions reached (1/1)",
+      "risks": [],
+      "metrics": {},
+      "rejected": []
+    },
+    {
+      "id": "dec_1775877845079_5115jy",
+      "ts": "2026-04-11T03:24:05.079Z",
+      "type": "skip",
+      "actor": "SCREENER",
+      "pool": null,
+      "pool_name": null,
+      "position": null,
+      "summary": "Screening skipped",
+      "reason": "Insufficient SOL (0.491 < 0.5)",
+      "risks": [],
+      "metrics": {},
+      "rejected": []
+    }
+  ]
+}
