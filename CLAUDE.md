@@ -70,6 +70,7 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 | Key | Section | Default |
 |-----|---------|---------|
 | minFeeActiveTvlRatio | screening | 0.05 |
+| maxVolatility | screening | 15.0 |
 | minTvl / maxTvl | screening | 10k / 150k |
 | minVolume | screening | 500 |
 | minOrganic | screening | 60 |
@@ -289,6 +290,7 @@ Optional confirmation logic that fetches RSI, Bollinger Bands, Supertrend, and F
 | `TELEGRAM_CHAT_ID` | No | Telegram chat target |
 | `LLM_BASE_URL` | No | Override for local LLM (e.g. LM Studio) |
 | `LLM_MODEL` | No | Override default model |
+| `JUPITER_API_KEY` | Yes | Jupiter swap & price API key |
 | `DRY_RUN` | No | Skip all on-chain transactions |
 | `HIVE_MIND_URL` | No | Collective intelligence server |
 | `HIVE_MIND_API_KEY` | No | Hive mind auth token |
@@ -299,6 +301,5 @@ Optional confirmation logic that fetches RSI, Bollinger Bands, Supertrend, and F
 
 ## Known Issues / Tech Debt
 
-- `lessons.js evolveThresholds()` evolves `maxVolatility` + `minFeeTvlRatio` (wrong key names — should be `minFeeActiveTvlRatio`; `maxVolatility` doesn't exist in config at all). The evolution is a no-op for those keys.
 - `get_wallet_positions` tool (dlmm.js) is in definitions.js but not in MANAGER_TOOLS or SCREENER_TOOLS — only available in GENERAL role.
 

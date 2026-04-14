@@ -3,6 +3,7 @@ import path from "path";
 
 const LOG_DIR = "./logs";
 const LOG_LEVEL = process.env.LOG_LEVEL || "info";
+const LOG_RETENTION_DAYS = parseInt(process.env.LOG_RETENTION_DAYS || "7", 10);
 
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const currentLevel = LEVELS[LOG_LEVEL] || 1;
@@ -11,6 +12,45 @@ const currentLevel = LEVELS[LOG_LEVEL] || 1;
 if (!fs.existsSync(LOG_DIR)) {
   fs.mkdirSync(LOG_DIR, { recursive: true });
 }
+
+// ─── Log Rotation ─────────────────────────────────────────────
+// Deletes log files older than LOG_RETENTION_DAYS on startup,
+// then checks once every 6 hours while running.
+function cleanOldLogs() {
+  try {
+    const files = fs.readdirSync(LOG_DIR);
+    const cutoff = Date.now() - LOG_RETENTION_DAYS * 86_400_000;
+    let removed = 0;
+
+    for (const file of files) {
+      // Match agent-YYYY-MM-DD.log, actions-YYYY-MM-DD.jsonl, snapshots-YYYY-MM-DD.jsonl
+      const dateMatch = file.match(/(\d{4}-\d{2}-\d{2})\.(log|jsonl)$/);
+      if (!dateMatch) continue;
+
+      const fileDate = new Date(dateMatch[1]).getTime();
+      if (Number.isNaN(fileDate)) continue;
+
+      if (fileDate < cutoff) {
+        try {
+          fs.unlinkSync(path.join(LOG_DIR, file));
+          removed++;
+        } catch { /* file may already be gone */ }
+      }
+    }
+
+    if (removed > 0) {
+      console.log(`[LOG ROTATION] Cleaned ${removed} log file(s) older than ${LOG_RETENTION_DAYS} days`);
+    }
+  } catch (e) {
+    console.error(`[LOG ROTATION] Error: ${e.message}`);
+  }
+}
+
+// Run on startup
+cleanOldLogs();
+
+// Run every 6 hours
+setInterval(cleanOldLogs, 6 * 3_600_000);
 
 /**
  * General log function.

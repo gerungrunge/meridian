@@ -251,7 +251,6 @@ export async function discoverPools({
  * Hard filters applied in code, agent decides which to deploy into.
  */
 export async function getTopCandidates({ limit = 10 } = {}) {
-  const { config } = await import("../config.js");
   const { pools } = await discoverPools({ page_size: 50 });
   const filteredOut = [];
 
@@ -399,6 +398,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
 
   return {
     candidates: eligible,
+    total_eligible: eligible.length,
     total_screened: pools.length,
     filtered_examples: filteredOut.slice(0, 3),
   };
