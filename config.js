@@ -18,11 +18,47 @@ if (u.llmBaseUrl) process.env.LLM_BASE_URL      ||= u.llmBaseUrl;
 if (u.llmApiKey)  process.env.LLM_API_KEY       ||= u.llmApiKey;
 if (u.dryRun !== undefined) process.env.DRY_RUN ||= String(u.dryRun);
 
+// ─── Environment Variable Overrides ──────────────────────────────
+// Priority: ENV VAR > user-config.json > hardcoded default
+// These cannot be overwritten by bot's self-tune or evolve functions.
+// Set in Dokploy Environment for quick changes without pushing code.
+//
+// Supported env vars:
+//   DEPLOY_AMOUNT_SOL, MAX_POSITIONS, MIN_SOL_TO_OPEN, MAX_DEPLOY_AMOUNT,
+//   GAS_RESERVE, POSITION_SIZE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT,
+//   MANAGEMENT_INTERVAL_MIN, SCREENING_INTERVAL_MIN
+function envNum(envKey) {
+  const val = process.env[envKey];
+  if (val == null || val === "") return undefined;
+  const n = Number(val);
+  return Number.isFinite(n) ? n : undefined;
+}
+function envBool(envKey) {
+  const val = process.env[envKey];
+  if (val == null || val === "") return undefined;
+  return val === "true" || val === "1";
+}
+
+// Apply env overrides on top of user-config values (env wins)
+const e = {
+  deployAmountSol:       envNum("DEPLOY_AMOUNT_SOL"),
+  maxPositions:          envNum("MAX_POSITIONS"),
+  minSolToOpen:          envNum("MIN_SOL_TO_OPEN"),
+  maxDeployAmount:       envNum("MAX_DEPLOY_AMOUNT"),
+  gasReserve:            envNum("GAS_RESERVE"),
+  positionSizePct:       envNum("POSITION_SIZE_PCT"),
+  stopLossPct:           envNum("STOP_LOSS_PCT"),
+  takeProfitPct:         envNum("TAKE_PROFIT_PCT"),
+  managementIntervalMin: envNum("MANAGEMENT_INTERVAL_MIN"),
+  screeningIntervalMin:  envNum("SCREENING_INTERVAL_MIN"),
+  dryRun:                envBool("DRY_RUN_OVERRIDE"),
+};
+
 export const config = {
   // ─── Risk Limits ─────────────────────────
   risk: {
-    maxPositions:    u.maxPositions    ?? 3,
-    maxDeployAmount: u.maxDeployAmount ?? 50,
+    maxPositions:    e.maxPositions    ?? u.maxPositions    ?? 3,
+    maxDeployAmount: e.maxDeployAmount ?? u.maxDeployAmount ?? 50,
   },
 
   // ─── Pool Screening Thresholds ───────────
@@ -66,14 +102,14 @@ export const config = {
     oorCooldownTriggerCount: u.oorCooldownTriggerCount ?? 3,
     oorCooldownHours:       u.oorCooldownHours       ?? 12,
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
-    stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
-    takeProfitPct:         u.takeProfitPct         ?? u.takeProfitFeePct ?? 5,
+    stopLossPct:           e.stopLossPct           ?? u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
+    takeProfitPct:         e.takeProfitPct         ?? u.takeProfitPct         ?? u.takeProfitFeePct ?? 5,
     minFeePerTvl24h:       u.minFeePerTvl24h       ?? 7,
     minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close
-    minSolToOpen:          u.minSolToOpen          ?? 0.55,
-    deployAmountSol:       u.deployAmountSol       ?? 0.5,
-    gasReserve:            u.gasReserve            ?? 0.2,
-    positionSizePct:       u.positionSizePct       ?? 0.35,
+    minSolToOpen:          e.minSolToOpen          ?? u.minSolToOpen          ?? 0.55,
+    deployAmountSol:       e.deployAmountSol       ?? u.deployAmountSol       ?? 0.5,
+    gasReserve:            e.gasReserve            ?? u.gasReserve            ?? 0.2,
+    positionSizePct:       e.positionSizePct       ?? u.positionSizePct       ?? 0.35,
     // Trailing take-profit
     trailingTakeProfit:    u.trailingTakeProfit    ?? true,
     trailingTriggerPct:    u.trailingTriggerPct    ?? 3,    // activate trailing at X% PnL
@@ -104,8 +140,8 @@ export const config = {
 
   // ─── Scheduling ─────────────────────────
   schedule: {
-    managementIntervalMin:  u.managementIntervalMin  ?? 10,
-    screeningIntervalMin:   u.screeningIntervalMin   ?? 30,
+    managementIntervalMin:  e.managementIntervalMin  ?? u.managementIntervalMin  ?? 10,
+    screeningIntervalMin:   e.screeningIntervalMin   ?? u.screeningIntervalMin   ?? 30,
     healthCheckIntervalMin: u.healthCheckIntervalMin ?? 60,
   },
 

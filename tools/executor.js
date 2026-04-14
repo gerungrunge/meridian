@@ -224,8 +224,31 @@ const toolMap = {
       return { success: false, unknown, reason };
     }
 
-    // Apply to live config immediately
+    // Environment variable locks — keys locked by env vars cannot be
+    // overridden by bot self-tune. The file is still updated for record,
+    // but the live config value stays as the env var dictates.
+    const ENV_LOCKS = {
+      deployAmountSol:       "DEPLOY_AMOUNT_SOL",
+      maxPositions:          "MAX_POSITIONS",
+      minSolToOpen:          "MIN_SOL_TO_OPEN",
+      maxDeployAmount:       "MAX_DEPLOY_AMOUNT",
+      gasReserve:            "GAS_RESERVE",
+      positionSizePct:       "POSITION_SIZE_PCT",
+      stopLossPct:           "STOP_LOSS_PCT",
+      takeProfitPct:         "TAKE_PROFIT_PCT",
+      managementIntervalMin: "MANAGEMENT_INTERVAL_MIN",
+      screeningIntervalMin:  "SCREENING_INTERVAL_MIN",
+    };
+
+    // Apply to live config immediately (skip env-locked keys)
+    const envLocked = [];
     for (const [key, val] of Object.entries(applied)) {
+      const envVar = ENV_LOCKS[key];
+      if (envVar && process.env[envVar] != null && process.env[envVar] !== "") {
+        envLocked.push(key);
+        log("config", `update_config: ${key} is locked by env var ${envVar} — skipping live update (file still updated)`);
+        continue;
+      }
       const [section, field] = CONFIG_MAP[key];
       const before = config[section][field];
       config[section][field] = val;
@@ -259,8 +282,8 @@ const toolMap = {
       addLesson(`[SELF-TUNED] Changed ${summary} — ${reason}`, ["self_tune", "config_change"]);
     }
 
-    log("config", `Agent self-tuned: ${JSON.stringify(applied)} — ${reason}`);
-    return { success: true, applied, unknown, reason };
+    log("config", `Agent self-tuned: ${JSON.stringify(applied)}${envLocked.length ? ` (env-locked: ${envLocked.join(", ")})` : ""} — ${reason}`);
+    return { success: true, applied, unknown, envLocked, reason };
   },
 };
 
