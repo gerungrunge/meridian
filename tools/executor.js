@@ -475,16 +475,24 @@ async function runSafetyChecks(name, args) {
         };
       }
 
-      // Check SOL balance
+      // Check SOL balance — auto-cap if LLM overshoots
       if (process.env.DRY_RUN !== "true") {
         const balance = await getWalletBalances();
         const gasReserve = config.management.gasReserve;
-        const minRequired = amountY + gasReserve;
-        if (balance.sol < minRequired) {
-          return {
-            pass: false,
-            reason: `Insufficient SOL: have ${balance.sol} SOL, need ${minRequired} SOL (${amountY} deploy + ${gasReserve} gas reserve).`,
-          };
+        const maxAffordable = parseFloat((balance.sol - gasReserve).toFixed(4));
+        if (amountY > maxAffordable) {
+          if (maxAffordable >= 0.1) {
+            // Auto-reduce to max affordable instead of blocking
+            const capped = parseFloat(Math.min(maxAffordable, config.risk.maxDeployAmount).toFixed(4));
+            log("safety_block", `deploy_position: LLM requested ${amountY} SOL but wallet can only afford ${capped} SOL (${balance.sol} - ${gasReserve} reserve). Auto-capping.`);
+            if (args.amount_y != null) args.amount_y = capped;
+            if (args.amount_sol != null) args.amount_sol = capped;
+          } else {
+            return {
+              pass: false,
+              reason: `Insufficient SOL: have ${balance.sol} SOL, need ${amountY + gasReserve} SOL (${amountY} deploy + ${gasReserve} gas reserve). Max affordable: ${maxAffordable} SOL.`,
+            };
+          }
         }
       }
 
