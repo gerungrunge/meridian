@@ -496,6 +496,13 @@ async function runSafetyChecks(name, args) {
         }
       }
 
+      // Hard-enforce configured strategy — LLM cannot override
+      const configuredStrategy = config.strategy?.strategy || "bid_ask";
+      if (args.strategy && args.strategy !== configuredStrategy) {
+        log("safety_block", `deploy_position: LLM chose "${args.strategy}" but config enforces "${configuredStrategy}". Auto-correcting.`);
+        args.strategy = configuredStrategy;
+      }
+
       return { pass: true };
     }
 
