@@ -398,10 +398,7 @@ export async function deployPosition({
   const totalBins = activeBinsBelow + activeBinsAbove;
   const isWideRange = totalBins > 69;
   const minBinId = activeBin.binId - activeBinsBelow;
-  // For single-sided SOL: exclude the active bin (it requires BOTH tokens).
-  // All bins below active bin only need token Y (SOL), avoiding "insufficient funds"
-  // when the wallet has no base token (X).
-  const maxBinId = isSingleSidedSol ? activeBin.binId - 1 : activeBin.binId + activeBinsAbove;
+  let maxBinId = isSingleSidedSol ? activeBin.binId : activeBin.binId + activeBinsAbove;
 
   if (minBinId > maxBinId) {
     throw new Error(`Invalid bin range: ${minBinId} -> ${maxBinId}`);
@@ -486,8 +483,10 @@ export async function deployPosition({
         (position) => position.pool === pool_address && position.lower_bin === minBinId && position.upper_bin === maxBinId,
       ) || refreshed?.positions?.find((position) => position.pool === pool_address);
 
-      const positionAddress = matching?.position || null;
-      if (positionAddress) {
+      const positionAddress = matching?.position || order?.positionId || order?.order?.positionId || "unknown";
+
+      if (positionAddress !== "unknown") {
+        _positionsCacheAt = 0;
         trackPosition({
           position: positionAddress,
           pool: pool_address,
@@ -607,16 +606,41 @@ export async function deployPosition({
       }
     } else {
       // ── Standard Path (≤69 bins) ─────────────────────────────────
-      const tx = await pool.initializePositionAndAddLiquidityByStrategy({
-        positionPubKey: newPosition.publicKey,
-        user: wallet.publicKey,
-        totalXAmount: totalXLamports,
-        totalYAmount: totalYLamports,
-        strategy: { maxBinId, minBinId, strategyType },
-        slippage: 10, // 10% (SDK uses percentage, not BPS)
-      });
-      const txHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet, newPosition]);
-      txHashes.push(txHash);
+      try {
+        const tx = await pool.initializePositionAndAddLiquidityByStrategy({
+          positionPubKey: newPosition.publicKey,
+          user: wallet.publicKey,
+          totalXAmount: totalXLamports,
+          totalYAmount: totalYLamports,
+          strategy: { maxBinId, minBinId, strategyType },
+          slippage: 10,
+        });
+        const txHash = await sendAndConfirmTransaction(getConnection(), tx, [wallet, newPosition]);
+        txHashes.push(txHash);
+      } catch (deployError) {
+        // If single-sided SOL fails with "insufficient funds" (no base token for active bin),
+        // retry with maxBinId - 1 to exclude the active bin entirely.
+        const isInsufficientFunds = /insufficient funds|custom program error: 0x1/i.test(deployError.message);
+        if (isSingleSidedSol && isInsufficientFunds && maxBinId === activeBin.binId) {
+          maxBinId = activeBin.binId - 1;
+          log("deploy", `Retrying with maxBinId=${maxBinId} (excluded active bin — wallet lacks base token)`);
+          const retryPosition = Keypair.generate();
+          const retryTx = await pool.initializePositionAndAddLiquidityByStrategy({
+            positionPubKey: retryPosition.publicKey,
+            user: wallet.publicKey,
+            totalXAmount: totalXLamports,
+            totalYAmount: totalYLamports,
+            strategy: { maxBinId, minBinId, strategyType },
+            slippage: 10,
+          });
+          const txHash = await sendAndConfirmTransaction(getConnection(), retryTx, [wallet, retryPosition]);
+          txHashes.push(txHash);
+          // Swap reference so tracking uses the retry keypair
+          Object.defineProperty(newPosition, 'publicKey', { value: retryPosition.publicKey });
+        } else {
+          throw deployError;
+        }
+      }
     }
 
     log("deploy", `SUCCESS — ${txHashes.length} tx(s): ${txHashes[0]}`);
