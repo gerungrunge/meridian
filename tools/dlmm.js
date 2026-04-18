@@ -698,11 +698,19 @@ let _positionsInflight = null; // deduplicates concurrent calls
 const LPAGENT_API = "https://api.lpagent.io/open-api/v1";
 
 async function fetchLpAgentOpenPositions(walletAddress) {
-  // Route through Agent Meridian relay when enabled (no LPAgent key needed)
+  // 1. Try Agent Meridian relay first if enabled (bridged access)
   if (config.api.lpAgentRelayEnabled) {
-    return fetchLpAgentViaRelay(walletAddress);
+    try {
+      const relayPositions = await fetchLpAgentViaRelay(walletAddress);
+      if (relayPositions && Object.keys(relayPositions).length > 0) {
+        return relayPositions;
+      }
+    } catch {
+      // Fall through to direct
+    }
   }
-  // Direct LPAgent fallback (requires LPAGENT_API_KEY)
+
+  // 2. Direct LPAgent fallback (requires LPAGENT_API_KEY in .env)
   if (!process.env.LPAGENT_API_KEY) return {};
 
   const url = `${LPAGENT_API}/lp-positions/opening?owner=${walletAddress}`;
