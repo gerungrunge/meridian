@@ -5,6 +5,9 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
 const DEFAULT_HIVEMIND_URL = "https://api.agentmeridian.xyz";
+const DEFAULT_AGENT_MERIDIAN_API_URL = "https://api.agentmeridian.xyz/api";
+const DEFAULT_AGENT_MERIDIAN_PUBLIC_KEY = "bWVyaWRpYW4taXMtdGhlLWJlc3QtYWdlbnRz";
+const DEFAULT_HIVEMIND_API_KEY = DEFAULT_AGENT_MERIDIAN_PUBLIC_KEY;
 
 const u = fs.existsSync(USER_CONFIG_PATH)
   ? JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"))
@@ -17,6 +20,19 @@ if (u.llmModel)  process.env.LLM_MODEL          ||= u.llmModel;
 if (u.llmBaseUrl) process.env.LLM_BASE_URL      ||= u.llmBaseUrl;
 if (u.llmApiKey)  process.env.LLM_API_KEY       ||= u.llmApiKey;
 if (u.dryRun !== undefined) process.env.DRY_RUN ||= String(u.dryRun);
+if (u.publicApiKey) process.env.PUBLIC_API_KEY ||= u.publicApiKey;
+if (u.agentMeridianApiUrl) process.env.AGENT_MERIDIAN_API_URL ||= u.agentMeridianApiUrl;
+
+const indicatorUserConfig = u.chartIndicators ?? {};
+
+function nonEmptyString(...values) {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
 
 // ─── Environment Variable Overrides ──────────────────────────────
 // Priority: ENV VAR > user-config.json > hardcoded default
@@ -176,26 +192,43 @@ export const config = {
 
   // ─── HiveMind ─────────────────────────
   hiveMind: {
-    url: u.hiveMindUrl ?? process.env.HIVEMIND_URL ?? DEFAULT_HIVEMIND_URL,
-    apiKey: u.hiveMindApiKey ?? process.env.HIVEMIND_API_KEY ?? "",
-    agentId: u.agentId ?? process.env.AGENT_ID ?? null,
+    url: nonEmptyString(u.hiveMindUrl, DEFAULT_HIVEMIND_URL),
+    apiKey: nonEmptyString(u.hiveMindApiKey, process.env.HIVEMIND_API_KEY, DEFAULT_HIVEMIND_API_KEY),
+    agentId: u.agentId ?? null,
     pullMode: u.hiveMindPullMode ?? "auto",
   },
 
   // ─── Agent Meridian API ──────────────
-  publicApiKey: u.publicApiKey ?? process.env.PUBLIC_API_KEY ?? "bWVyaWRpYW4taXMtdGhlLWJlc3QtYWdlbnRz",
-  agentMeridianApiUrl: u.agentMeridianApiUrl ?? "https://api.agentmeridian.xyz/api",
-  lpAgentRelayEnabled: false, // FORCE OFF to prevent 404 logs even if set to true in stale user-configs
+  api: {
+    url: nonEmptyString(u.agentMeridianApiUrl, process.env.AGENT_MERIDIAN_API_URL, DEFAULT_AGENT_MERIDIAN_API_URL),
+    publicApiKey: nonEmptyString(u.publicApiKey, process.env.PUBLIC_API_KEY, DEFAULT_AGENT_MERIDIAN_PUBLIC_KEY),
+    lpAgentRelayEnabled: false, // FORCE OFF to prevent 404 logs even if set to true in stale user-configs
+  },
+
+  // ─── Jupiter ─────────────────────────
+  jupiter: {
+    apiKey: process.env.JUPITER_API_KEY ?? "",
+    referralAccount:
+      process.env.JUPITER_REFERRAL_ACCOUNT ??
+      "9MzhDUnq3KxecyPzvhguQMMPbooXQ3VAoCMPDnoijwey",
+    referralFeeBps: Number(
+      process.env.JUPITER_REFERRAL_FEE_BPS ?? 50,
+    ),
+  },
 
   // ─── Chart Indicators ────────────────
-  chartIndicators: {
-    enabled:       u.chartIndicators?.enabled       ?? false,
-    entryPreset:   u.chartIndicators?.entryPreset   ?? null,
-    exitPreset:    u.chartIndicators?.exitPreset     ?? null,
-    rsiLength:     u.chartIndicators?.rsiLength      ?? 14,
-    intervals:     u.chartIndicators?.intervals      ?? ["5_MINUTE"],
-    rsiOversold:   u.chartIndicators?.rsiOversold    ?? 30,
-    rsiOverbought: u.chartIndicators?.rsiOverbought  ?? 80,
+  indicators: {
+    enabled: indicatorUserConfig.enabled ?? false,
+    entryPreset: indicatorUserConfig.entryPreset ?? "supertrend_break",
+    exitPreset: indicatorUserConfig.exitPreset ?? "supertrend_break",
+    rsiLength: indicatorUserConfig.rsiLength ?? 2,
+    intervals: Array.isArray(indicatorUserConfig.intervals)
+      ? indicatorUserConfig.intervals
+      : ["5_MINUTE"],
+    candles: indicatorUserConfig.candles ?? 298,
+    rsiOversold: indicatorUserConfig.rsiOversold ?? 30,
+    rsiOverbought: indicatorUserConfig.rsiOverbought ?? 80,
+    requireAllIntervals: indicatorUserConfig.requireAllIntervals ?? false,
   },
 };
 

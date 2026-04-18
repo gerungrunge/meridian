@@ -23,10 +23,10 @@ import { log } from "./logger.js";
  * @returns {object|null} - Indicator data or null on failure
  */
 export async function fetchChartIndicators(mint, opts = {}) {
-  const cfg = config.chartIndicators;
+  const cfg = config.indicators;
   if (!cfg?.enabled) return null;
 
-  const apiUrl = config.agentMeridianApiUrl;
+  const apiUrl = config.api.url;
   if (!apiUrl) {
     log("indicators_warn", "agentMeridianApiUrl not configured — skipping chart indicators");
     return null;
@@ -97,7 +97,7 @@ function evaluatePreset(preset, indicators, direction = "entry") {
     return { confirmed: false, reason: "no indicator data", signals: {} };
   }
 
-  const cfg = config.chartIndicators || {};
+  const cfg = config.indicators || {};
   const oversold = cfg.rsiOversold ?? 30;
   const overbought = cfg.rsiOverbought ?? 80;
 
@@ -237,7 +237,7 @@ function evaluatePreset(preset, indicators, direction = "entry") {
  * @returns {{ confirmed: boolean, reason: string, signals: object, preset: string }|null}
  */
 export async function checkEntryConfirmation(mint) {
-  const cfg = config.chartIndicators;
+  const cfg = config.indicators;
   if (!cfg?.enabled || !cfg?.entryPreset) return null;
 
   try {
@@ -264,7 +264,7 @@ export async function checkEntryConfirmation(mint) {
  * @returns {{ confirmed: boolean, reason: string, signals: object, preset: string }|null}
  */
 export async function checkExitConfirmation(mint) {
-  const cfg = config.chartIndicators;
+  const cfg = config.indicators;
   if (!cfg?.enabled || !cfg?.exitPreset) return null;
 
   try {
@@ -291,7 +291,7 @@ export async function checkExitConfirmation(mint) {
  * @returns {string|null}
  */
 export async function getIndicatorSummary(mint) {
-  const cfg = config.chartIndicators;
+  const cfg = config.indicators;
   if (!cfg?.enabled) return null;
 
   try {
