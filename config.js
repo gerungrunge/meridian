@@ -202,7 +202,7 @@ export const config = {
   api: {
     url: nonEmptyString(u.agentMeridianApiUrl, process.env.AGENT_MERIDIAN_API_URL, DEFAULT_AGENT_MERIDIAN_API_URL),
     publicApiKey: nonEmptyString(u.publicApiKey, process.env.PUBLIC_API_KEY, DEFAULT_AGENT_MERIDIAN_PUBLIC_KEY),
-    lpAgentRelayEnabled: false, // FORCE OFF to prevent 404 logs even if set to true in stale user-configs
+    lpAgentRelayEnabled: u.lpAgentRelayEnabled ?? false,
   },
 
   // ─── Jupiter ─────────────────────────

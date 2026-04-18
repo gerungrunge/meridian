@@ -1,95 +1,165 @@
 {
+  "_changelog": {
+    "_note": "Changes applied 2026-04-18. Revert values listed below if config is not optimal.",
+    "deployAmountSol":       "0.30 → 0.28",
+    "gasReserve":            "0.08 → 0.15",
+    "minTvl":                "6000 → 7000",
+    "maxTvl":                "300000 → 280000",
+    "minVolume":             "2500 → 2000",
+    "minOrganic":            "40 → 50",
+    "minHolders":            "350 → 320",
+    "minMcap":               "250000 → 300000",
+    "maxMcap":               "12000000 → 10000000",
+    "minTokenAgeHours":      "0.5 → 2",
+    "maxTokenAgeHours":      "null → 60",
+    "athFilterPct":          "15 → 25",
+    "maxBundlePct":          "20 → 18",
+    "maxBotHoldersPct":      "20 → 18",
+    "maxTop10Pct":           "75 → 55",
+    "useDiscordSignals":     "false → true",
+    "minVolumeToRebalance":  "1800 → 1600",
+    "stopLossPct":           "-8 → -11",
+    "emergencyPriceDropPct": "-12 → -14",
+    "takeProfitPct":         "5 → 6",
+    "feeYieldEvalPct":       "1.5 → 1.4",
+    "feeYieldClosePct":      "3.5 → 3.2",
+    "feeYieldEmergencyPct":  "6 → 5.5",
+    "trailingDropPct":       "1 → 1.5",
+    "volumeDecayAlertPct":   "15 → 12",
+    "volumeDecayClosePct":   "25 → 22",
+    "deadPoolMinYieldPct":   "2 → 1.8",
+    "screeningIntervalMin":  "15 → 20",
+    "darwinBoost":           "1.1 → 1.18",
+    "darwinDecay":           "0.9 → 0.88",
+    "darwinFloor":           "0.4 → 0.45",
+    "darwinCeiling":         "2.2 → 2.4",
+    "darwinMinSamples":      "5 → 6",
+    "rsiLength":             "3 → 3 (no change)",
+    "rsiOversold":           "28 → 30",
+    "rsiOverbought":         "78 → 76"
+  },
+
   "preset": "compound_hunter_v1",
-  "deployAmountSol": 0.30,
+
+  "deployAmountSol": 0.28,
   "maxPositions": 1,
-  "minSolToOpen": 0.4,
+  "minSolToOpen": 0.40,
   "maxDeployAmount": 1.5,
-  "gasReserve": 0.08,
-  "positionSizePct": 0.9,
+  "gasReserve": 0.15,
+  "positionSizePct": 0.90,
+
   "strategy": "bid_ask",
   "binsBelow": 35,
   "timeframe": "5m",
   "category": "trending",
+
   "excludeHighSupplyConcentration": false,
-  "minTvl": 6000,
-  "maxTvl": 300000,
-  "minVolume": 2500,
-  "minOrganic": 40,
+
+  "minTvl": 7000,
+  "maxTvl": 280000,
+  "minVolume": 2000,
+
+  "minOrganic": 50,
   "minQuoteOrganic": 75,
-  "minHolders": 350,
-  "minMcap": 250000,
-  "maxMcap": 12000000,
+  "minHolders": 320,
+
+  "minMcap": 300000,
+  "maxMcap": 10000000,
+
   "minBinStep": 50,
   "maxBinStep": 180,
+
   "minFeeActiveTvlRatio": 0.02,
   "minTokenFeesSol": 8,
-  "useDiscordSignals": false,
+
+  "useDiscordSignals": true,
   "discordSignalMode": "merge",
+
   "avoidPvpSymbols": true,
   "blockPvpSymbols": true,
-  "maxBundlePct": 20,
-  "maxBotHoldersPct": 20,
-  "maxTop10Pct": 75,
+
+  "maxBundlePct": 18,
+  "maxBotHoldersPct": 18,
+  "maxTop10Pct": 55,
+
   "allowedLaunchpads": [],
   "blockedLaunchpads": [],
-  "minTokenAgeHours": 0.5,
-  "maxTokenAgeHours": null,
-  "athFilterPct": 15,
+
+  "minTokenAgeHours": 2,
+  "maxTokenAgeHours": 60,
+  "athFilterPct": 25,
+
   "minClaimAmount": 0.5,
   "autoSwapAfterClaim": true,
+
   "outOfRangeBinsToClose": 4,
   "outOfRangeWaitMinutes": 5,
   "oorCooldownTriggerCount": 2,
   "oorCooldownHours": 4,
-  "minVolumeToRebalance": 1800,
-  "stopLossPct": -8,
-  "emergencyPriceDropPct": -12,
-  "takeProfitPct": 5,
-  "feeYieldEvalPct": 1.5,
-  "feeYieldClosePct": 3.5,
-  "feeYieldEmergencyPct": 6,
+
+  "minVolumeToRebalance": 1600,
+
+  "stopLossPct": -11,
+  "emergencyPriceDropPct": -14,
+
+  "takeProfitPct": 6,
+  "feeYieldEvalPct": 1.4,
+  "feeYieldClosePct": 3.2,
+  "feeYieldEmergencyPct": 5.5,
+
   "minFeePerTvl24h": 8,
   "minAgeBeforeYieldCheck": 20,
+
   "trailingTakeProfit": true,
   "trailingTriggerPct": 2,
-  "trailingDropPct": 1,
+  "trailingDropPct": 1.5,
+
   "pnlSanityMaxDiffPct": 5,
+
   "solMode": true,
-  "volumeDecayAlertPct": 15,
-  "volumeDecayClosePct": 25,
+
+  "volumeDecayAlertPct": 12,
+  "volumeDecayClosePct": 22,
+
   "ilPriceMovePct": 10,
+
   "deadPoolMaxMinutes": 25,
-  "deadPoolMinYieldPct": 2,
+  "deadPoolMinYieldPct": 1.8,
+
   "managementIntervalMin": 10,
-  "screeningIntervalMin": 15,
+  "screeningIntervalMin": 20,
   "healthCheckIntervalMin": 30,
+
   "temperature": 0.15,
   "maxTokens": 4096,
   "maxSteps": 18,
+
   "managementModel": "MiniMax-M2.5",
   "screeningModel": "MiniMax-M2.5",
   "generalModel": "MiniMax-M2.7",
+
   "darwinEnabled": true,
   "darwinWindowDays": 30,
   "darwinRecalcEvery": 3,
-  "darwinBoost": 1.1,
-  "darwinDecay": 0.9,
-  "darwinFloor": 0.4,
-  "darwinCeiling": 2.2,
-  "darwinMinSamples": 5,
+  "darwinBoost": 1.18,
+  "darwinDecay": 0.88,
+  "darwinFloor": 0.45,
+  "darwinCeiling": 2.4,
+  "darwinMinSamples": 6,
+
   "hiveMindPullMode": "auto",
   "lpAgentRelayEnabled": true,
   "agentMeridianApiUrl": "https://api.agentmeridian.xyz/api",
+
   "chartIndicators": {
     "enabled": true,
     "entryPreset": "supertrend_break",
     "exitPreset": "supertrend_break",
     "rsiLength": 3,
-    "intervals": [
-      "5_MINUTE"
-    ],
-    "rsiOversold": 28,
-    "rsiOverbought": 78
+    "intervals": ["5_MINUTE"],
+    "rsiOversold": 30,
+    "rsiOverbought": 76
   },
+
   "agentId": "agt_75a798c3113cab5b362c2ed6"
 }
