@@ -11,7 +11,7 @@ import readline from "readline";
 import { agentLoop } from "./agent.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
-import { getWalletBalances } from "./tools/wallet.js";
+import { getWalletBalances, swapToken } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
@@ -201,6 +201,38 @@ export async function runManagementCycle({ silent = false } = {}) {
     positions = livePositions?.positions || [];
 
     if (positions.length === 0) {
+      // ── Stale token cleanup ─────────────────────────────────────
+      // When relay close fails or position is auto-closed by state sync,
+      // non-SOL tokens can be left stranded. Swap them back to SOL.
+      try {
+        const balances = await getWalletBalances();
+        const SOL_MINT = config.tokens.SOL;
+        const USDC_MINT = config.tokens.USDC;
+        const USDT_MINT = config.tokens.USDT;
+        const SKIP_MINTS = new Set([SOL_MINT, USDC_MINT, USDT_MINT]);
+        const staleTokens = (balances.tokens || []).filter(
+          t => !SKIP_MINTS.has(t.mint) && t.usd != null && t.usd >= 0.10 && t.balance > 0
+        );
+        if (staleTokens.length > 0) {
+          log("cron", `Found ${staleTokens.length} stale token(s) in wallet — auto-swapping to SOL`);
+          for (const token of staleTokens) {
+            try {
+              log("cron", `Swapping stale ${token.symbol} ($${token.usd.toFixed(2)}) → SOL`);
+              const swapResult = await swapToken({ input_mint: token.mint, output_mint: "SOL", amount: token.balance });
+              if (swapResult?.success) {
+                log("cron", `Stale swap OK: ${token.symbol} → ${swapResult.amount_out ?? "?"} SOL (tx: ${swapResult.tx})`);
+              } else {
+                log("cron_warn", `Stale swap failed for ${token.symbol}: ${swapResult?.error || "unknown"}`);
+              }
+            } catch (swapErr) {
+              log("cron_warn", `Stale swap error for ${token.symbol}: ${swapErr.message}`);
+            }
+          }
+        }
+      } catch (cleanupErr) {
+        log("cron_warn", `Stale token cleanup failed: ${cleanupErr.message}`);
+      }
+
       log("cron", "No open positions — triggering screening cycle");
       mgmtReport = "No open positions. Triggering screening cycle.";
       runScreeningCycle().catch((e) => log("cron_error", `Triggered screening failed: ${e.message}`));

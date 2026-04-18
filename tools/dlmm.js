@@ -1348,7 +1348,9 @@ export async function closePosition({ position_address, reason }) {
     const wallet = getWallet();
     const poolAddress = await lookupPoolForPosition(position_address, wallet.publicKey.toString());
     const poolMeta = await getPoolMetadata(poolAddress);
+    let relayFailed = false;
     if (shouldUseLpAgentRelay()) {
+      try {
       const livePositions = await getMyPositions({ force: true, silent: true });
       const livePosition = livePositions?.positions?.find((position) => position.position === position_address);
       const closeFromBinId = livePosition?.lower_bin ?? tracked?.bin_range?.min ?? -887272;
@@ -1553,8 +1555,13 @@ export async function closePosition({ position_address, reason }) {
         txs: txHashes,
         base_mint: livePosition?.base_mint || null,
       };
+      } catch (relayErr) {
+        log("close_warn", `Relay close failed, falling back to SDK direct path: ${relayErr.message}`);
+        relayFailed = true;
+      }
     }
 
+    if (!shouldUseLpAgentRelay() || relayFailed) {
     // Clear cached pool so SDK loads fresh position fee state
     poolCache.delete(poolAddress.toString());
     const pool = await getPool(poolAddress);
@@ -1819,6 +1826,7 @@ export async function closePosition({ position_address, reason }) {
       txs: txHashes,
       base_mint: pool.lbPair.tokenXMint.toString(),
     };
+    } // end SDK direct path
   } catch (error) {
     log("close_error", error.message);
     return { success: false, error: error.message };
