@@ -186,6 +186,7 @@ export async function discoverPools({
       const byPool = new Map(rawPools.map((pool) => [pool.pool_address, pool]));
       for (const signalPool of signalPools) {
         if (byPool.has(signalPool.pool_address)) {
+          // Already in discovery results — just annotate with signal metadata
           byPool.set(signalPool.pool_address, {
             ...byPool.get(signalPool.pool_address),
             discord_signal: true,
@@ -195,6 +196,19 @@ export async function discoverPools({
             discord_signal_last_seen_at: signalPool.discord_signal_last_seen_at,
           });
         } else {
+          // Signal-only pool: validate against hard thresholds before merging
+          // (discovery API filters these server-side, but signal pools bypass that)
+          const tvl = Number(signalPool.active_tvl || signalPool.tvl || 0);
+          const vol = Number(signalPool.volume || 0);
+          const binStep = Number(signalPool.dlmm_params?.bin_step || signalPool.bin_step || 0);
+          if (tvl < s.minTvl || vol < s.minVolume) {
+            log("screening", `Discord signal skipped: ${signalPool.name || signalPool.pool_address?.slice(0, 8)} — TVL ${tvl} / vol ${vol} below thresholds`);
+            continue;
+          }
+          if (binStep > 0 && (binStep < s.minBinStep || binStep > s.maxBinStep)) {
+            log("screening", `Discord signal skipped: ${signalPool.name || signalPool.pool_address?.slice(0, 8)} — bin_step ${binStep} outside [${s.minBinStep}-${s.maxBinStep}]`);
+            continue;
+          }
           byPool.set(signalPool.pool_address, signalPool);
         }
       }
