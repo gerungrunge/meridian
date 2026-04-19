@@ -149,6 +149,12 @@ export async function swapToken({
   input_mint  = normalizeMint(input_mint);
   output_mint = normalizeMint(output_mint);
 
+  // Guard: prevent same-mint swaps (e.g. SOL → SOL)
+  if (input_mint === output_mint) {
+    log("swap_warn", `Blocked same-mint swap: ${input_mint}`);
+    return { success: false, error: "inputMint cannot be same as outputMint" };
+  }
+
   if (process.env.DRY_RUN === "true") {
     return {
       dry_run: true,

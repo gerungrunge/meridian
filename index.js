@@ -209,16 +209,31 @@ export async function runManagementCycle({ silent = false } = {}) {
         const SOL_MINT = config.tokens.SOL;
         const USDC_MINT = config.tokens.USDC;
         const USDT_MINT = config.tokens.USDT;
-        const SKIP_MINTS = new Set([SOL_MINT, USDC_MINT, USDT_MINT]);
-        const staleTokens = (balances.tokens || []).filter(
-          t => !SKIP_MINTS.has(t.mint) && t.usd != null && t.usd >= 0.10 && t.balance > 0
-        );
+        // Skip SOL, USDC, USDT, and anything that normalizes to the wrapped SOL mint
+        const { normalizeMint } = await import("./tools/wallet.js");
+        const staleTokens = (balances.tokens || []).filter(t => {
+          if (!t.mint || t.balance <= 0 || (t.usd != null && t.usd < 0.10)) return false;
+          // Skip SOL by every possible check: direct mint match, normalized, and symbol
+          if (t.mint === SOL_MINT) return false;
+          const norm = normalizeMint(t.mint);
+          if (norm === SOL_MINT) return false;
+          if (t.mint === USDC_MINT || t.mint === USDT_MINT) return false;
+          const sym = (t.symbol || "").toUpperCase();
+          if (sym === "SOL" || sym === "WSOL" || sym === "USDC" || sym === "USDT") return false;
+          return true;
+        });
         if (staleTokens.length > 0) {
           log("cron", `Found ${staleTokens.length} stale token(s) in wallet — auto-swapping to SOL`);
           for (const token of staleTokens) {
             try {
+              // Final safety: skip if input mint resolves to SOL (prevents SOL→SOL swap)
+              const resolvedInput = normalizeMint(token.mint);
+              if (resolvedInput === SOL_MINT) {
+                log("cron", `Skipping stale swap for ${token.symbol} — resolves to SOL mint`);
+                continue;
+              }
               log("cron", `Swapping stale ${token.symbol} ($${token.usd.toFixed(2)}) → SOL`);
-              const swapResult = await swapToken({ input_mint: token.mint, output_mint: "SOL", amount: token.balance });
+              const swapResult = await swapToken({ input_mint: token.mint, output_mint: SOL_MINT, amount: token.balance });
               if (swapResult?.success) {
                 log("cron", `Stale swap OK: ${token.symbol} → ${swapResult.amount_out ?? "?"} SOL (tx: ${swapResult.tx})`);
               } else {
