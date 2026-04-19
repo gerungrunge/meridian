@@ -1,51 +1,17 @@
 {
   "_changelog": {
-    "_note": "Changes applied 2026-04-18. Revert values listed below if config is not optimal.",
-    "deployAmountSol":       "0.30 → 0.28",
-    "gasReserve":            "0.08 → 0.15",
-    "minTvl":                "6000 → 7000",
-    "maxTvl":                "300000 → 280000",
-    "minVolume":             "2500 → 2000",
-    "minOrganic":            "40 → 50",
-    "minHolders":            "350 → 320",
-    "minMcap":               "250000 → 300000",
-    "maxMcap":               "12000000 → 10000000",
-    "minTokenAgeHours":      "0.5 → 2",
-    "maxTokenAgeHours":      "null → 60",
-    "athFilterPct":          "15 → 25",
-    "maxBundlePct":          "20 → 18",
-    "maxBotHoldersPct":      "20 → 18",
-    "maxTop10Pct":           "75 → 55",
-    "useDiscordSignals":     "false → true",
-    "minVolumeToRebalance":  "1800 → 1600",
-    "stopLossPct":           "-8 → -11",
-    "emergencyPriceDropPct": "-12 → -14",
-    "takeProfitPct":         "5 → 6",
-    "feeYieldEvalPct":       "1.5 → 1.4",
-    "feeYieldClosePct":      "3.5 → 3.2",
-    "feeYieldEmergencyPct":  "6 → 5.5",
-    "trailingDropPct":       "1 → 1.5",
-    "volumeDecayAlertPct":   "15 → 12",
-    "volumeDecayClosePct":   "25 → 22",
-    "deadPoolMinYieldPct":   "2 → 1.8",
-    "screeningIntervalMin":  "15 → 20",
-    "darwinBoost":           "1.1 → 1.18",
-    "darwinDecay":           "0.9 → 0.88",
-    "darwinFloor":           "0.4 → 0.45",
-    "darwinCeiling":         "2.2 → 2.4",
-    "darwinMinSamples":      "5 → 6",
-    "rsiLength":             "3 → 3 (no change)",
-    "rsiOversold":           "28 → 30",
-    "rsiOverbought":         "78 → 76"
+    "_note": "Reverted high-impact changes on 2026-04-19. Kept low-impact improvements.",
+    "reverted": "stopLossPct, emergencyPriceDropPct, takeProfitPct, maxTop10Pct, athFilterPct, minOrganic, minMcap, maxTokenAgeHours, volumeDecay, trailingDropPct, darwinBoost/Decay, useDiscordSignals, gasReserve, deployAmountSol",
+    "kept": "minTvl=7000, minHolders=320, maxBundlePct=18, maxBotHoldersPct=18, minTokenAgeHours=2, feeYieldEvalPct=1.4, feeYieldClosePct=3.2, deadPoolMinYieldPct=1.8, darwinFloor=0.45, darwinCeiling=2.4, darwinMinSamples=6, screeningIntervalMin=20"
   },
 
   "preset": "compound_hunter_v1",
 
-  "deployAmountSol": 0.28,
+  "deployAmountSol": 0.30,
   "maxPositions": 1,
   "minSolToOpen": 0.40,
   "maxDeployAmount": 1.5,
-  "gasReserve": 0.15,
+  "gasReserve": 0.08,
   "positionSizePct": 0.90,
 
   "strategy": "bid_ask",
@@ -57,14 +23,14 @@
 
   "minTvl": 7000,
   "maxTvl": 280000,
-  "minVolume": 2000,
+  "minVolume": 2500,
 
-  "minOrganic": 50,
+  "minOrganic": 40,
   "minQuoteOrganic": 75,
   "minHolders": 320,
 
-  "minMcap": 300000,
-  "maxMcap": 10000000,
+  "minMcap": 250000,
+  "maxMcap": 12000000,
 
   "minBinStep": 50,
   "maxBinStep": 180,
@@ -72,7 +38,7 @@
   "minFeeActiveTvlRatio": 0.02,
   "minTokenFeesSol": 8,
 
-  "useDiscordSignals": true,
+  "useDiscordSignals": false,
   "discordSignalMode": "merge",
 
   "avoidPvpSymbols": true,
@@ -80,14 +46,14 @@
 
   "maxBundlePct": 18,
   "maxBotHoldersPct": 18,
-  "maxTop10Pct": 55,
+  "maxTop10Pct": 75,
 
   "allowedLaunchpads": [],
   "blockedLaunchpads": [],
 
   "minTokenAgeHours": 2,
-  "maxTokenAgeHours": 60,
-  "athFilterPct": 25,
+  "maxTokenAgeHours": null,
+  "athFilterPct": 15,
 
   "minClaimAmount": 0.5,
   "autoSwapAfterClaim": true,
@@ -97,12 +63,12 @@
   "oorCooldownTriggerCount": 2,
   "oorCooldownHours": 4,
 
-  "minVolumeToRebalance": 1600,
+  "minVolumeToRebalance": 1800,
 
-  "stopLossPct": -11,
-  "emergencyPriceDropPct": -14,
+  "stopLossPct": -8,
+  "emergencyPriceDropPct": -12,
 
-  "takeProfitPct": 6,
+  "takeProfitPct": 5,
   "feeYieldEvalPct": 1.4,
   "feeYieldClosePct": 3.2,
   "feeYieldEmergencyPct": 5.5,
@@ -112,14 +78,14 @@
 
   "trailingTakeProfit": true,
   "trailingTriggerPct": 2,
-  "trailingDropPct": 1.5,
+  "trailingDropPct": 1,
 
   "pnlSanityMaxDiffPct": 5,
 
   "solMode": true,
 
-  "volumeDecayAlertPct": 12,
-  "volumeDecayClosePct": 22,
+  "volumeDecayAlertPct": 15,
+  "volumeDecayClosePct": 25,
 
   "ilPriceMovePct": 10,
 
@@ -141,8 +107,8 @@
   "darwinEnabled": true,
   "darwinWindowDays": 30,
   "darwinRecalcEvery": 3,
-  "darwinBoost": 1.18,
-  "darwinDecay": 0.88,
+  "darwinBoost": 1.1,
+  "darwinDecay": 0.9,
   "darwinFloor": 0.45,
   "darwinCeiling": 2.4,
   "darwinMinSamples": 6,
