@@ -1,8 +1,9 @@
 {
   "_changelog": {
-    "_note": "Reverted high-impact changes on 2026-04-19. Kept low-impact improvements.",
-    "reverted": "stopLossPct, emergencyPriceDropPct, takeProfitPct, maxTop10Pct, athFilterPct, minOrganic, minMcap, maxTokenAgeHours, volumeDecay, trailingDropPct, darwinBoost/Decay, useDiscordSignals, gasReserve, deployAmountSol",
-    "kept": "minTvl=7000, minHolders=320, maxBundlePct=18, maxBotHoldersPct=18, minTokenAgeHours=2, feeYieldEvalPct=1.4, feeYieldClosePct=3.2, deadPoolMinYieldPct=1.8, darwinFloor=0.45, darwinCeiling=2.4, darwinMinSamples=6, screeningIntervalMin=20"
+    "_note": "2026-04-20: Widened entry gates + tightened trailing stops. More entries, same safety.",
+    "entry_relaxed": "entryPreset=supertrend_or_rsi, maxBotHoldersPct=24, minTokenFeesSol=5, minHolders=250, minMcap=180000, screeningIntervalMin=15",
+    "risk_tightened": "trailingTriggerPct=1.8, trailingDropPct=0.8, deadPoolMaxMinutes=20, outOfRangeWaitMinutes=4",
+    "unchanged": "stopLossPct=-8, emergencyPriceDropPct=-12, takeProfitPct=5, maxBundlePct=18, athFilterPct=15, minOrganic=40"
   },
 
   "preset": "compound_hunter_v1",
@@ -19,7 +20,7 @@
   "timeframe": "5m",
   "category": "trending",
 
-  "excludeHighSupplyConcentration": false,
+  "excludeHighSupplyConcentration": true,
 
   "minTvl": 7000,
   "maxTvl": 280000,
@@ -27,16 +28,16 @@
 
   "minOrganic": 40,
   "minQuoteOrganic": 75,
-  "minHolders": 320,
+  "minHolders": 250,
 
-  "minMcap": 250000,
+  "minMcap": 180000,
   "maxMcap": 12000000,
 
   "minBinStep": 50,
   "maxBinStep": 180,
 
   "minFeeActiveTvlRatio": 0.02,
-  "minTokenFeesSol": 8,
+  "minTokenFeesSol": 5,
 
   "useDiscordSignals": false,
   "discordSignalMode": "merge",
@@ -45,8 +46,8 @@
   "blockPvpSymbols": true,
 
   "maxBundlePct": 18,
-  "maxBotHoldersPct": 18,
-  "maxTop10Pct": 75,
+  "maxBotHoldersPct": 24,
+  "maxTop10Pct": 65,
 
   "allowedLaunchpads": [],
   "blockedLaunchpads": [],
@@ -59,7 +60,7 @@
   "autoSwapAfterClaim": true,
 
   "outOfRangeBinsToClose": 4,
-  "outOfRangeWaitMinutes": 5,
+  "outOfRangeWaitMinutes": 4,
   "oorCooldownTriggerCount": 2,
   "oorCooldownHours": 4,
 
@@ -77,8 +78,8 @@
   "minAgeBeforeYieldCheck": 20,
 
   "trailingTakeProfit": true,
-  "trailingTriggerPct": 2,
-  "trailingDropPct": 1,
+  "trailingTriggerPct": 1.8,
+  "trailingDropPct": 0.9,
 
   "pnlSanityMaxDiffPct": 5,
 
@@ -89,11 +90,11 @@
 
   "ilPriceMovePct": 10,
 
-  "deadPoolMaxMinutes": 25,
+  "deadPoolMaxMinutes": 20,
   "deadPoolMinYieldPct": 1.8,
 
   "managementIntervalMin": 10,
-  "screeningIntervalMin": 20,
+  "screeningIntervalMin": 15,
   "healthCheckIntervalMin": 30,
 
   "temperature": 0.15,
@@ -119,7 +120,7 @@
 
   "chartIndicators": {
     "enabled": true,
-    "entryPreset": "supertrend_break",
+    "entryPreset": "supertrend_or_rsi",
     "exitPreset": "supertrend_break",
     "rsiLength": 3,
     "intervals": ["5_MINUTE"],
