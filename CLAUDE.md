@@ -49,6 +49,15 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 
 ---
 
+## Windows Shell Usage
+
+- **User Environment**: Microsoft Windows / PowerShell
+- **Command Separator**: Use `;` (semicolon) instead of `&&`.
+- **Path Separator**: Use `\` for local system commands.
+- **Rule File**: See `.agent/rules/windows.md` for details.
+
+---
+
 ## Adding a New Tool
 
 1. **`tools/definitions.js`** — Add OpenAI-format schema object to the `tools` array
