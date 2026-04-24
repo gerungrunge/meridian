@@ -1,17 +1,14 @@
 {
   "_changelog": {
-    "_note": "2026-04-24 R3: Third pass — fixed athFilterPct (was broken), AND-logic entry confirmation, stronger liquidity & age filters.",
-    "r3_bugfix": "athFilterPct: 15 (broken, filter never fired) → -5 (require 5% pullback from ATH)",
+    "_note": "2026-04-24 R4: Pragmatic relaxation — R1-R3 combined produced 0 candidates (over-filtered). Rolled back most aggressive tightenings to middle ground, kept defensive improvements.",
+    "r4_relaxed": "minFeeActiveTvlRatio: 0.04→0.025, minTokenFeesSol: 15→8, minHolders: 300→250, minVolume: 5000→3000, minOrganic: 50→45, minTokenAgeHours: 4→2, athFilterPct: -5→0",
+    "r4_kept": "maxTop10Pct=60, maxBinStep=150, minTvl=10000, entryPreset=rsi_plus_supertrend (AND logic), all R1-R2 exit timers + trailing",
     "r3_entry_conviction": "chartIndicators.entryPreset: supertrend_or_rsi (OR) → rsi_plus_supertrend (AND)",
-    "r3_entry_quality": "minTvl=10000, minTokenAgeHours=4, maxVolatility=12 (explicit)",
-    "r3_cooldown": "oorCooldownHours=8 (longer blacklist on failed pools)",
-    "r2_entry_quality": "minVolume=5000, maxTop10Pct=60, maxBinStep=150, minHolders=300",
     "r2_profit_capture": "trailingTriggerPct=2.5, minFeePerTvl24h=6",
     "r2_darwin": "darwinFloor=0.35",
     "r1_exit_extended": "deadPoolMaxMinutes=60, outOfRangeWaitMinutes=12, minAgeBeforeYieldCheck=40",
     "r1_noise_reduced": "volumeDecayAlertPct=30, volumeDecayClosePct=50, trailingDropPct=1.2",
     "r1_fee_yield_raised": "feeYieldEvalPct=2.0, feeYieldClosePct=4.5",
-    "r1_entry_quality": "minTokenFeesSol=15, minFeeActiveTvlRatio=0.04, minOrganic=50",
     "unchanged": "stopLossPct=-8, ilPriceMovePct=10, takeProfitPct=5, feeYieldEmergencyPct=5.5, maxPositions=1"
   },
 
@@ -33,11 +30,11 @@
 
   "minTvl": 10000,
   "maxTvl": 280000,
-  "minVolume": 5000,
+  "minVolume": 3000,
 
-  "minOrganic": 50,
+  "minOrganic": 45,
   "minQuoteOrganic": 75,
-  "minHolders": 300,
+  "minHolders": 250,
 
   "minMcap": 180000,
   "maxMcap": 12000000,
@@ -45,8 +42,8 @@
   "minBinStep": 50,
   "maxBinStep": 150,
 
-  "minFeeActiveTvlRatio": 0.04,
-  "minTokenFeesSol": 15,
+  "minFeeActiveTvlRatio": 0.025,
+  "minTokenFeesSol": 8,
 
   "useDiscordSignals": false,
   "discordSignalMode": "merge",
@@ -61,9 +58,9 @@
   "allowedLaunchpads": [],
   "blockedLaunchpads": [],
 
-  "minTokenAgeHours": 4,
+  "minTokenAgeHours": 2,
   "maxTokenAgeHours": null,
-  "athFilterPct": -5,
+  "athFilterPct": 0,
   "maxVolatility": 12,
 
   "minClaimAmount": 0.5,
