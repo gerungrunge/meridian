@@ -1,7 +1,7 @@
 {
   "_changelog": {
     "_note": "2026-04-24 R5: API filter relaxation — R4 still returned 0 candidates. Root cause: fee_active_tvl_ratio + maxTvl + minMcap combined killed all results in slow market. Targeted fixes to discovery query.",
-    "r5_api_relaxed": "minFeeActiveTvlRatio: 0.025→0.008, maxTvl: 280000→600000, minMcap: 180000→80000",
+    "r5_api_relaxed": "minFeeActiveTvlRatio: 0.025→0.008, maxTvl: 280000→600000, minMcap: 180000→80000, entryPreset: rsi_plus_supertrend→supertrend_or_rsi",
     "r4_relaxed": "minFeeActiveTvlRatio: 0.04→0.025, minTokenFeesSol: 15→8, minHolders: 300→250, minVolume: 5000→3000, minOrganic: 50→45, minTokenAgeHours: 4→2, athFilterPct: -5→0",
     "r4_kept": "maxTop10Pct=60, maxBinStep=150, minTvl=10000, entryPreset=rsi_plus_supertrend (AND logic), all R1-R2 exit timers + trailing",
     "r3_entry_conviction": "chartIndicators.entryPreset: supertrend_or_rsi (OR) → rsi_plus_supertrend (AND)",
@@ -128,7 +128,7 @@
 
   "chartIndicators": {
     "enabled": true,
-    "entryPreset": "rsi_plus_supertrend",
+    "entryPreset": "supertrend_or_rsi",
     "exitPreset": "supertrend_break",
     "rsiLength": 3,
     "intervals": ["5_MINUTE"],
