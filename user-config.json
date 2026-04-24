@@ -1,9 +1,18 @@
 {
   "_changelog": {
-    "_note": "2026-04-20: Widened entry gates + tightened trailing stops. More entries, same safety.",
-    "entry_relaxed": "entryPreset=supertrend_or_rsi, maxBotHoldersPct=24, minTokenFeesSol=5, minHolders=250, minMcap=180000, screeningIntervalMin=15",
-    "risk_tightened": "trailingTriggerPct=1.8, trailingDropPct=0.8, deadPoolMaxMinutes=20, outOfRangeWaitMinutes=4",
-    "unchanged": "stopLossPct=-8, emergencyPriceDropPct=-12, takeProfitPct=5, maxBundlePct=18, athFilterPct=15, minOrganic=40"
+    "_note": "2026-04-24 R3: Third pass — fixed athFilterPct (was broken), AND-logic entry confirmation, stronger liquidity & age filters.",
+    "r3_bugfix": "athFilterPct: 15 (broken, filter never fired) → -5 (require 5% pullback from ATH)",
+    "r3_entry_conviction": "chartIndicators.entryPreset: supertrend_or_rsi (OR) → rsi_plus_supertrend (AND)",
+    "r3_entry_quality": "minTvl=10000, minTokenAgeHours=4, maxVolatility=12 (explicit)",
+    "r3_cooldown": "oorCooldownHours=8 (longer blacklist on failed pools)",
+    "r2_entry_quality": "minVolume=5000, maxTop10Pct=60, maxBinStep=150, minHolders=300",
+    "r2_profit_capture": "trailingTriggerPct=2.5, minFeePerTvl24h=6",
+    "r2_darwin": "darwinFloor=0.35",
+    "r1_exit_extended": "deadPoolMaxMinutes=60, outOfRangeWaitMinutes=12, minAgeBeforeYieldCheck=40",
+    "r1_noise_reduced": "volumeDecayAlertPct=30, volumeDecayClosePct=50, trailingDropPct=1.2",
+    "r1_fee_yield_raised": "feeYieldEvalPct=2.0, feeYieldClosePct=4.5",
+    "r1_entry_quality": "minTokenFeesSol=15, minFeeActiveTvlRatio=0.04, minOrganic=50",
+    "unchanged": "stopLossPct=-8, ilPriceMovePct=10, takeProfitPct=5, feeYieldEmergencyPct=5.5, maxPositions=1"
   },
 
   "preset": "compound_hunter_v1",
@@ -12,7 +21,7 @@
   "maxPositions": 1,
   "minSolToOpen": 0.40,
   "maxDeployAmount": 1.5,
-  "gasReserve": 0.08,
+  "gasReserve": 0.06,
   "positionSizePct": 0.90,
 
   "strategy": "bid_ask",
@@ -22,22 +31,22 @@
 
   "excludeHighSupplyConcentration": true,
 
-  "minTvl": 7000,
+  "minTvl": 10000,
   "maxTvl": 280000,
-  "minVolume": 2500,
+  "minVolume": 5000,
 
-  "minOrganic": 40,
+  "minOrganic": 50,
   "minQuoteOrganic": 75,
-  "minHolders": 250,
+  "minHolders": 300,
 
   "minMcap": 180000,
   "maxMcap": 12000000,
 
   "minBinStep": 50,
-  "maxBinStep": 180,
+  "maxBinStep": 150,
 
-  "minFeeActiveTvlRatio": 0.02,
-  "minTokenFeesSol": 5,
+  "minFeeActiveTvlRatio": 0.04,
+  "minTokenFeesSol": 15,
 
   "useDiscordSignals": false,
   "discordSignalMode": "merge",
@@ -47,22 +56,23 @@
 
   "maxBundlePct": 18,
   "maxBotHoldersPct": 24,
-  "maxTop10Pct": 65,
+  "maxTop10Pct": 60,
 
   "allowedLaunchpads": [],
   "blockedLaunchpads": [],
 
-  "minTokenAgeHours": 2,
+  "minTokenAgeHours": 4,
   "maxTokenAgeHours": null,
-  "athFilterPct": 15,
+  "athFilterPct": -5,
+  "maxVolatility": 12,
 
   "minClaimAmount": 0.5,
   "autoSwapAfterClaim": true,
 
   "outOfRangeBinsToClose": 4,
-  "outOfRangeWaitMinutes": 4,
+  "outOfRangeWaitMinutes": 12,
   "oorCooldownTriggerCount": 2,
-  "oorCooldownHours": 4,
+  "oorCooldownHours": 8,
 
   "minVolumeToRebalance": 1800,
 
@@ -70,27 +80,27 @@
   "emergencyPriceDropPct": -12,
 
   "takeProfitPct": 5,
-  "feeYieldEvalPct": 1.4,
-  "feeYieldClosePct": 3.2,
+  "feeYieldEvalPct": 2.0,
+  "feeYieldClosePct": 4.5,
   "feeYieldEmergencyPct": 5.5,
 
-  "minFeePerTvl24h": 8,
-  "minAgeBeforeYieldCheck": 20,
+  "minFeePerTvl24h": 6,
+  "minAgeBeforeYieldCheck": 40,
 
   "trailingTakeProfit": true,
-  "trailingTriggerPct": 1.8,
-  "trailingDropPct": 0.9,
+  "trailingTriggerPct": 2.5,
+  "trailingDropPct": 1.2,
 
   "pnlSanityMaxDiffPct": 5,
 
   "solMode": true,
 
-  "volumeDecayAlertPct": 15,
-  "volumeDecayClosePct": 25,
+  "volumeDecayAlertPct": 30,
+  "volumeDecayClosePct": 50,
 
   "ilPriceMovePct": 10,
 
-  "deadPoolMaxMinutes": 20,
+  "deadPoolMaxMinutes": 60,
   "deadPoolMinYieldPct": 1.8,
 
   "managementIntervalMin": 10,
@@ -110,7 +120,7 @@
   "darwinRecalcEvery": 3,
   "darwinBoost": 1.1,
   "darwinDecay": 0.9,
-  "darwinFloor": 0.45,
+  "darwinFloor": 0.35,
   "darwinCeiling": 2.4,
   "darwinMinSamples": 6,
 
@@ -120,7 +130,7 @@
 
   "chartIndicators": {
     "enabled": true,
-    "entryPreset": "supertrend_or_rsi",
+    "entryPreset": "rsi_plus_supertrend",
     "exitPreset": "supertrend_break",
     "rsiLength": 3,
     "intervals": ["5_MINUTE"],
