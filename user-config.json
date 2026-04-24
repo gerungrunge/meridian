@@ -1,6 +1,7 @@
 {
   "_changelog": {
-    "_note": "2026-04-24 R4: Pragmatic relaxation — R1-R3 combined produced 0 candidates (over-filtered). Rolled back most aggressive tightenings to middle ground, kept defensive improvements.",
+    "_note": "2026-04-24 R5: API filter relaxation — R4 still returned 0 candidates. Root cause: fee_active_tvl_ratio + maxTvl + minMcap combined killed all results in slow market. Targeted fixes to discovery query.",
+    "r5_api_relaxed": "minFeeActiveTvlRatio: 0.025→0.008, maxTvl: 280000→600000, minMcap: 180000→80000",
     "r4_relaxed": "minFeeActiveTvlRatio: 0.04→0.025, minTokenFeesSol: 15→8, minHolders: 300→250, minVolume: 5000→3000, minOrganic: 50→45, minTokenAgeHours: 4→2, athFilterPct: -5→0",
     "r4_kept": "maxTop10Pct=60, maxBinStep=150, minTvl=10000, entryPreset=rsi_plus_supertrend (AND logic), all R1-R2 exit timers + trailing",
     "r3_entry_conviction": "chartIndicators.entryPreset: supertrend_or_rsi (OR) → rsi_plus_supertrend (AND)",
@@ -29,20 +30,20 @@
   "excludeHighSupplyConcentration": true,
 
   "minTvl": 10000,
-  "maxTvl": 280000,
+  "maxTvl": 600000,
   "minVolume": 3000,
 
   "minOrganic": 45,
   "minQuoteOrganic": 75,
   "minHolders": 250,
 
-  "minMcap": 180000,
+  "minMcap": 80000,
   "maxMcap": 12000000,
 
   "minBinStep": 50,
   "maxBinStep": 150,
 
-  "minFeeActiveTvlRatio": 0.025,
+  "minFeeActiveTvlRatio": 0.008,
   "minTokenFeesSol": 8,
 
   "useDiscordSignals": false,
