@@ -307,10 +307,12 @@ export async function getTopCandidates({ limit = 10 } = {}) {
         pushFilteredReason(filteredOut, p, "token cooldown active");
         return false;
       }
-      // Hard volatility floor — low-vol pools earn ~$0 fees unless bin_step compensates
+      // Hard volatility floor — low-vol pools earn ~$0 fees unless bin_step compensates.
+      // Treat vol == 0 or null as "unknown/insufficient data" (typically fresh pools) and let through;
+      // only reject when API actually reports a measurable-but-low volatility.
       const minVol = config.screening.minVolatility;
       const volCompBinStep = config.screening.volatilityCompensateBinStep;
-      if (minVol != null && p.volatility != null && p.volatility < minVol) {
+      if (minVol != null && p.volatility != null && p.volatility > 0 && p.volatility < minVol) {
         if (!(p.bin_step != null && p.bin_step >= volCompBinStep)) {
           log("screening", `Volatility floor: dropped ${p.name} — vol ${p.volatility} < ${minVol} and bin_step ${p.bin_step} < ${volCompBinStep}`);
           pushFilteredReason(filteredOut, p, `vol ${p.volatility} < ${minVol} (bin_step ${p.bin_step} < ${volCompBinStep})`);

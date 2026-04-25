@@ -1,6 +1,7 @@
 {
   "_changelog": {
-    "_note": "2026-04-25 R6: hard volatility floor in screening.js (was prompt-only, LLM ignored — PNL25 showed 5/5 deploys violated it: vol 1.00-1.27, bin_step 80-100, all closed in 12-17min with $0 fees).",
+    "_note": "2026-04-25 R6.1 hotfix: vol floor was rejecting ALL candidates because API returns vol=0 for fresh/sleepy pools. 70 minutes zero-deploy after first close (发财-SOL @ 0.97% low yield). Fix: only reject when vol > 0 AND < 1.5 (treat 0/null as 'unknown', let through).",
+    "_note_r6": "2026-04-25 R6: hard volatility floor in screening.js (was prompt-only, LLM ignored — PNL25 showed 5/5 deploys violated it: vol 1.00-1.27, bin_step 80-100, all closed in 12-17min with $0 fees).",
     "r6_volatility_floor": "minVolatility=1.5, volatilityCompensateBinStep=125 — drop pools with vol<1.5 unless bin_step>=125",
     "r6_oor_grace": "minAgeBeforeOOR=25 — OOR rule cannot close positions younger than 25min; PNL25 showed 3/5 closes at 12-17min were premature OOR exits with $0 fees",
     "r6_exit_preset_off": "chartIndicators.exitPreset: supertrend_break → null — removes 5-min indicator hint from management prompt to isolate effect of OOR grace+vol floor; deterministic rules (stop loss, trailing TP, OOR, dead pool, fee yield, volume decay) unchanged",
