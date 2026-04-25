@@ -367,6 +367,34 @@ export async function deployPosition({
     };
   }
 
+  // Enrich learning metadata if LLM didn't pass it — without this, evolveThresholds()
+  // gets null fields and silently filters them out, halting the learning loop.
+  if (volatility == null || fee_tvl_ratio == null || organic_score == null) {
+    try {
+      const { getPoolDetail } = await import("./screening.js");
+      const detail = await getPoolDetail({ pool_address, timeframe: config.screening.timeframe });
+      if (detail) {
+        if (volatility == null && Number.isFinite(detail.volatility)) volatility = detail.volatility;
+        if (fee_tvl_ratio == null) {
+          if (Number.isFinite(detail.fee_active_tvl_ratio) && detail.fee_active_tvl_ratio > 0) {
+            fee_tvl_ratio = detail.fee_active_tvl_ratio;
+          } else if (Number.isFinite(detail.fee) && Number.isFinite(detail.active_tvl) && detail.active_tvl > 0) {
+            fee_tvl_ratio = (detail.fee / detail.active_tvl) * 100;
+          }
+        }
+        if (organic_score == null && Number.isFinite(detail.token_x?.organic_score)) {
+          organic_score = detail.token_x.organic_score;
+        }
+        if (bin_step == null && Number.isFinite(detail.dlmm_params?.bin_step)) {
+          bin_step = detail.dlmm_params.bin_step;
+        }
+        log("deploy", `Enriched deploy metadata from pool detail: vol=${volatility} feeTvl=${fee_tvl_ratio?.toFixed?.(4)} organic=${organic_score} binStep=${bin_step}`);
+      }
+    } catch (e) {
+      log("deploy_warn", `Pool detail enrichment failed: ${e.message} — learning fields may be null`);
+    }
+  }
+
   const strategyMap = {
     spot: StrategyType.Spot,
     curve: StrategyType.Curve,

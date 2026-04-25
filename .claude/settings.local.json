@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(pdfinfo /c/Users/Admin/Desktop/PNL25.pdf)",
+      "Bash(pdftotext -layout \"/c/Users/Admin/Desktop/PNL25.pdf\" -)",
+      "Bash(pdftotext \"/c/Users/Admin/Desktop/PNL25.pdf\" /tmp/pnl25.txt)",
+      "Read(//tmp/**)",
+      "Bash(mkdir -p /c/temp)",
+      "Bash(cp \"/c/Users/Admin/Desktop/PNL25.pdf\" /c/temp/pnl25.pdf)",
+      "Read(//c/temp/**)",
+      "Bash(pacman -Ss poppler)",
+      "Bash(where pdftoppm *)",
+      "Read(//c//**)",
+      "Bash(python *)",
+      "Bash(pip install *)",
+      "Bash(node *)"
+    ]
+  }
+}

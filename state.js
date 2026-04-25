@@ -464,8 +464,10 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   // ── VOLUME DECAY DETECTION ───────────────────────────────────────
   if (pos.peak_volume != null && trade_volume_24h != null && pos.peak_volume > 0) {
     const decayPct = ((pos.peak_volume - trade_volume_24h) / pos.peak_volume) * 100;
-    if (mgmtConfig.volumeDecayClosePct != null && decayPct >= mgmtConfig.volumeDecayClosePct) {
-      return { action: "DECAY_CLOSE", reason: `Volume decay: Dropped ${decayPct.toFixed(1)}% from peak >= limit ${mgmtConfig.volumeDecayClosePct}%` };
+    const minAgeForDecay = mgmtConfig.minAgeBeforeDecayClose ?? 0;
+    const ageOk = age_minutes == null || age_minutes >= minAgeForDecay;
+    if (mgmtConfig.volumeDecayClosePct != null && decayPct >= mgmtConfig.volumeDecayClosePct && ageOk) {
+      return { action: "DECAY_CLOSE", reason: `Volume decay: Dropped ${decayPct.toFixed(1)}% from peak >= limit ${mgmtConfig.volumeDecayClosePct}% (age ${age_minutes ?? "?"}m)` };
     } else if (mgmtConfig.volumeDecayAlertPct != null && decayPct >= mgmtConfig.volumeDecayAlertPct) {
       if (!pos.volume_alert_logged) {
         log("state", `HIGH ALERT: Volume decay for ${position_address} dropped ${decayPct.toFixed(1)}% from peak.`);
@@ -529,7 +531,9 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   // ── Out of range too long ──────────────────────────────────────
   if (pos.out_of_range_since) {
     const minutesOOR = Math.floor((Date.now() - new Date(pos.out_of_range_since).getTime()) / 60000);
-    if (minutesOOR >= mgmtConfig.outOfRangeWaitMinutes) {
+    const minAgeForOOR = mgmtConfig.minAgeBeforeOOR ?? 0;
+    const ageOk = age_minutes == null || age_minutes >= minAgeForOOR;
+    if (minutesOOR >= mgmtConfig.outOfRangeWaitMinutes && ageOk) {
       return {
         action: "OUT_OF_RANGE",
         reason: `Out of range for ${minutesOOR}m (limit: ${mgmtConfig.outOfRangeWaitMinutes}m)`,

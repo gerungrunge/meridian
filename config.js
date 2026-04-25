@@ -107,6 +107,8 @@ export const config = {
     maxTokenAgeHours:   u.maxTokenAgeHours   ?? null, // null = no maximum
     athFilterPct:       u.athFilterPct       ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
     maxVolatility:      u.maxVolatility      ?? 15.0, // max pool volatility ceiling (auto-evolved)
+    minVolatility:      u.minVolatility      ?? 1.5,  // hard floor — pools below earn ~$0 fees unless bin_step compensates
+    volatilityCompensateBinStep: u.volatilityCompensateBinStep ?? 125, // bin_step >= this allows pools below minVolatility through
   },
 
   // ─── Position Management ────────────────
@@ -115,6 +117,8 @@ export const config = {
     autoSwapAfterClaim:    u.autoSwapAfterClaim    ?? false,
     outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 10,
     outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 30,
+    minAgeBeforeOOR:       u.minAgeBeforeOOR       ?? 25, // minutes — position must be at least this old before OOR rule can close it
+    minAgeBeforeDecayClose: u.minAgeBeforeDecayClose ?? 30, // minutes — peak_volume needs samples to be trustworthy before decay-close fires
     oorCooldownTriggerCount: u.oorCooldownTriggerCount ?? 3,
     oorCooldownHours:       u.oorCooldownHours       ?? 12,
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
@@ -220,7 +224,8 @@ export const config = {
   indicators: {
     enabled: indicatorUserConfig.enabled ?? false,
     entryPreset: indicatorUserConfig.entryPreset ?? "supertrend_break",
-    exitPreset: indicatorUserConfig.exitPreset ?? "supertrend_break",
+    // Use 'in' check so explicit `null` in user-config disables exit preset (vs falling back to default)
+    exitPreset: "exitPreset" in indicatorUserConfig ? indicatorUserConfig.exitPreset : "supertrend_break",
     rsiLength: indicatorUserConfig.rsiLength ?? 2,
     intervals: Array.isArray(indicatorUserConfig.intervals)
       ? indicatorUserConfig.intervals

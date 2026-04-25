@@ -307,6 +307,16 @@ export async function getTopCandidates({ limit = 10 } = {}) {
         pushFilteredReason(filteredOut, p, "token cooldown active");
         return false;
       }
+      // Hard volatility floor — low-vol pools earn ~$0 fees unless bin_step compensates
+      const minVol = config.screening.minVolatility;
+      const volCompBinStep = config.screening.volatilityCompensateBinStep;
+      if (minVol != null && p.volatility != null && p.volatility < minVol) {
+        if (!(p.bin_step != null && p.bin_step >= volCompBinStep)) {
+          log("screening", `Volatility floor: dropped ${p.name} — vol ${p.volatility} < ${minVol} and bin_step ${p.bin_step} < ${volCompBinStep}`);
+          pushFilteredReason(filteredOut, p, `vol ${p.volatility} < ${minVol} (bin_step ${p.bin_step} < ${volCompBinStep})`);
+          return false;
+        }
+      }
       return true;
     })
     .sort((a, b) => scoreCandidate(b) - scoreCandidate(a))

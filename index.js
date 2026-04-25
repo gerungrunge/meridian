@@ -888,7 +888,8 @@ function getDeterministicCloseRule(position, managementConfig) {
     position.active_bin != null &&
     position.upper_bin != null &&
     position.active_bin > position.upper_bin &&
-    (position.minutes_out_of_range ?? 0) >= managementConfig.outOfRangeWaitMinutes
+    (position.minutes_out_of_range ?? 0) >= managementConfig.outOfRangeWaitMinutes &&
+    (position.age_minutes == null || position.age_minutes >= (managementConfig.minAgeBeforeOOR ?? 0))
   ) {
     return { action: "CLOSE", rule: 4, reason: "OOR" };
   }

@@ -219,7 +219,7 @@ const actualBaseFee = baseFactor > 0
 - `getLessonsForPrompt({ agentType })` — injects relevant lessons into system prompt
 - `evolveThresholds()` — adjusts screening thresholds based on winners vs losers
 - Performance recorded via `recordPerformance()` called from executor.js after `close_position`
-- **Known issue**: `evolveThresholds()` references `maxVolatility` and `minFeeTvlRatio` but config.js uses `minFeeActiveTvlRatio` and has no `maxVolatility` key — the evolution of these keys is a no-op
+- **Data dependency**: `evolveThresholds()` reads `volatility`, `fee_tvl_ratio`, `organic_score` from `recordPerformance()` records. These must be present at deploy time (via `trackPosition()` args). If LLM forgets to pass them when calling `deploy_position`, `dlmm.js:deployPosition` falls back to enriching from `getPoolDetail()` so the learning loop stays alive.
 
 ---
 
