@@ -86,8 +86,45 @@ function getMeridianHeaders() {
   return headers;
 }
 
+// ─── Relay Circuit Breaker ─────────────────────────────────────
+// Opens after RELAY_CIRCUIT_THRESHOLD consecutive failures, auto-closes after RELAY_CIRCUIT_COOLDOWN_MS.
+// Prevents log spam and latency cost when Agent Meridian is down.
+const RELAY_CIRCUIT_THRESHOLD = 3;
+const RELAY_CIRCUIT_COOLDOWN_MS = 10 * 60 * 1000; // 10 min
+let _relayConsecutiveFails = 0;
+let _relayCircuitOpenAt = 0;
+
+function isRelayCircuitOpen() {
+  if (!_relayCircuitOpenAt) return false;
+  if (Date.now() - _relayCircuitOpenAt >= RELAY_CIRCUIT_COOLDOWN_MS) {
+    _relayCircuitOpenAt = 0;
+    _relayConsecutiveFails = 0;
+    log("positions", "Relay circuit auto-closed — retrying Agent Meridian");
+    return false;
+  }
+  return true;
+}
+
+function recordRelayFailure(label) {
+  _relayConsecutiveFails += 1;
+  if (_relayConsecutiveFails >= RELAY_CIRCUIT_THRESHOLD && !_relayCircuitOpenAt) {
+    _relayCircuitOpenAt = Date.now();
+    log("positions_warn", `Relay circuit OPEN after ${_relayConsecutiveFails} consecutive failures — skipping Agent Meridian for ${RELAY_CIRCUIT_COOLDOWN_MS / 60_000} min`);
+  } else {
+    log("positions_warn", `Agent Meridian relay failed${label ? ` (${label})` : ""}; falling back to Meteora/local path (fail ${_relayConsecutiveFails}/${RELAY_CIRCUIT_THRESHOLD})`);
+  }
+}
+
+function recordRelaySuccess() {
+  if (_relayConsecutiveFails > 0) {
+    log("positions", "Agent Meridian relay recovered — circuit closed");
+  }
+  _relayConsecutiveFails = 0;
+  _relayCircuitOpenAt = 0;
+}
+
 function shouldUseLpAgentRelay() {
-  return !!config.api.lpAgentRelayEnabled;
+  return !!config.api.lpAgentRelayEnabled && !isRelayCircuitOpen();
 }
 
 function shouldUseLpAgentRelayForDeploy() {
@@ -113,12 +150,13 @@ async function meridianJson(pathname, options = {}) {
       return await meridianJsonOnce(
         pathname,
         fetchOptions,
-        Math.min(Number(retry.perAttemptTimeoutMs || 10_000), remainingMs),
+        Math.min(Number(retry.perAttemptTimeoutMs || 15_000), remainingMs),
       );
     } catch (error) {
       lastError = error;
       const status = Number(error?.status || 0);
-      if (!isRetryableMeridianStatus(status) || attempt >= maxAttempts - 1) {
+      const retryable = isRetryableMeridianStatus(status) || error.timedOut === true;
+      if (!retryable || attempt >= maxAttempts - 1) {
         throw error;
       }
       const waitMs = Math.min(meridianRetryDelayMs(error, attempt), Math.max(0, remainingMs - 1));
@@ -153,7 +191,8 @@ async function meridianFetchWithTimeout(url, options, timeoutMs) {
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let _timedOut = false;
+  const timer = setTimeout(() => { _timedOut = true; controller.abort(); }, timeoutMs);
   const signal = options.signal;
   const abortFromParent = () => controller.abort();
   if (signal) {
@@ -163,6 +202,13 @@ async function meridianFetchWithTimeout(url, options, timeoutMs) {
 
   try {
     return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (_timedOut && err.name === "AbortError") {
+      const timeoutErr = new Error(`Request timed out after ${timeoutMs}ms`);
+      timeoutErr.timedOut = true;
+      throw timeoutErr;
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
     if (signal) signal.removeEventListener("abort", abortFromParent);
@@ -866,6 +912,7 @@ export async function getPositionPnl({ pool_address, position_address }) {
         walletAddress,
         agentId: config.hiveMind.agentId || "agent-local",
       });
+      recordRelaySuccess();
       const p = payload?.positions?.find((position) => position.position === position_address);
       if (p) {
         return {
@@ -885,6 +932,7 @@ export async function getPositionPnl({ pool_address, position_address }) {
       }
       log("pnl_warn", "Relay positions API did not include requested position; falling back to Meteora PnL path");
     } catch (error) {
+      recordRelayFailure(error.message);
       log("pnl_warn", `Relay PnL lookup failed; falling back to Meteora PnL path: ${error.message}`);
     }
   }
@@ -1052,6 +1100,7 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
             walletAddress,
             agentId: config.hiveMind.agentId || "agent-local",
           });
+          recordRelaySuccess();
           const normalizedPositions = Array.isArray(result.positions) ? result.positions : [];
           syncOpenPositions(normalizedPositions.map((p) => p.position));
           _positionsCache = {
@@ -1063,7 +1112,7 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
           _positionsCacheAt = Date.now();
           return _positionsCache;
         } catch (error) {
-          log("positions_warn", `Agent Meridian relay failed; falling back to Meteora/local positions path: ${error.message}`);
+          recordRelayFailure(error.message);
         }
       }
 
