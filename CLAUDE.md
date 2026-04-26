@@ -128,8 +128,14 @@ These run in `getDeterministicCloseRule` and `updatePnlAndCheckExits`.
 
 1. **Deploy**: `deploy_position` → executor safety checks → `trackPosition()` in state.js → Telegram notify
 2. **Monitor**: management cron → `getMyPositions()` → `getPositionPnl()` → OOR detection → pool-memory snapshots
-3. **Close**: `close_position` → `recordPerformance()` in lessons.js → auto-swap base token to SOL → Telegram notify
+3. **Close**: `close_position` → `recordPerformance()` in lessons.js → auto-swap base token to SOL → `sweepDust()` (cleans residual SPL dust) → Telegram notify
 4. **Learn**: `evolveThresholds()` runs on performance data → updates config.screening → persists to user-config.json
+
+### Dust Sweep (wallet.js)
+
+`sweepDust({ min_usd, slippage_bps, skip_mints })` — walks all SPL tokens in the wallet, skips SOL/USDC/USDT and any mint passed in `skip_mints` (typically active LP base mints), then swaps each remaining token above `min_usd` to SOL. Per-token try/catch so a single failure doesn't block the rest. Runs automatically after `close_position` and `claim_fees` when `dustSweepEnabled: true`. Also exposed as the `sweep_dust` tool for manual MANAGER calls.
+
+Config: `dustSweepEnabled` (default true), `dustSweepMinUsd` (default 0.05), `dustSweepSlippageBps` (default 500 = 5% — generous to handle thin-liquidity dust).
 
 ---
 

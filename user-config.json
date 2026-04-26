@@ -75,6 +75,9 @@
 
   "minClaimAmount": 0.5,
   "autoSwapAfterClaim": true,
+  "dustSweepEnabled": true,
+  "dustSweepMinUsd": 0.05,
+  "dustSweepSlippageBps": 500,
 
   "outOfRangeBinsToClose": 4,
   "outOfRangeWaitMinutes": 12,

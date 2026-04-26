@@ -116,6 +116,9 @@ export const config = {
   management: {
     minClaimAmount:        u.minClaimAmount        ?? 5,
     autoSwapAfterClaim:    u.autoSwapAfterClaim    ?? false,
+    dustSweepEnabled:      u.dustSweepEnabled      ?? true,  // sweep all SPL dust to SOL after close/claim
+    dustSweepMinUsd:       u.dustSweepMinUsd       ?? 0.05,  // skip tokens below this USD value
+    dustSweepSlippageBps:  u.dustSweepSlippageBps  ?? 500,   // generous slippage for thin-liquidity dust (5%)
     outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 10,
     outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 30,
     minAgeBeforeOOR:       u.minAgeBeforeOOR       ?? 25, // minutes — position must be at least this old before OOR rule can close it

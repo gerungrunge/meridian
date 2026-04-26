@@ -9,7 +9,7 @@ import {
   closePosition,
   searchPools,
 } from "./dlmm.js";
-import { getWalletBalances, swapToken } from "./wallet.js";
+import { getWalletBalances, swapToken, sweepDust } from "./wallet.js";
 import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
 import { setPositionInstruction } from "../state.js";
@@ -58,6 +58,21 @@ const toolMap = {
   close_position: closePosition,
   get_wallet_balance: getWalletBalances,
   swap_token: swapToken,
+  sweep_dust: async ({ min_usd, slippage_bps } = {}) => {
+    // Auto-collect active position base mints so we never sweep an open LP token
+    let skipMints = [];
+    try {
+      const positions = await getMyPositions({ force: true });
+      skipMints = (positions.positions || []).map((p) => p.base_mint).filter(Boolean);
+    } catch (e) {
+      log("dust_sweep_warn", `Could not fetch active positions: ${e.message}`);
+    }
+    return sweepDust({
+      min_usd: min_usd ?? config.management.dustSweepMinUsd,
+      slippage_bps: slippage_bps ?? config.management.dustSweepSlippageBps,
+      skip_mints: skipMints,
+    });
+  },
   get_top_lpers: studyTopLPers,
   study_top_lpers: studyTopLPers,
   set_position_note: ({ position_address, instruction }) => {
@@ -299,6 +314,7 @@ const WRITE_TOOLS = new Set([
   "claim_fees",
   "close_position",
   "swap_token",
+  "sweep_dust",
 ]);
 const PROTECTED_TOOLS = new Set([
   ...WRITE_TOOLS,
@@ -367,7 +383,12 @@ export async function executeTool(name, args) {
             const token = balances.tokens?.find(t => t.mint === result.base_mint);
             if (token && token.usd >= 0.10) {
               log("executor", `Auto-swapping ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd.toFixed(2)}) back to SOL`);
-              const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
+              const swapResult = await swapToken({
+                input_mint: result.base_mint,
+                output_mint: "SOL",
+                amount: token.balance,
+                slippage_bps: config.management.dustSweepSlippageBps,
+              });
               // Tell the model the swap already happened so it doesn't call swap_token again
               result.auto_swapped = true;
               result.auto_swap_note = `Base token already auto-swapped back to SOL (${token.symbol || result.base_mint.slice(0, 8)} → SOL). Do NOT call swap_token again.`;
@@ -377,16 +398,53 @@ export async function executeTool(name, args) {
             log("executor_warn", `Auto-swap after close failed: ${e.message}`);
           }
         }
+        // Sweep ALL remaining SPL dust to SOL (catches old leftovers + tokens below the $0.10 single-swap threshold)
+        if (!args.skip_swap && config.management.dustSweepEnabled) {
+          try {
+            const positions = await getMyPositions({ force: true });
+            const activeMints = (positions.positions || []).map(p => p.base_mint).filter(Boolean);
+            const sweep = await sweepDust({
+              min_usd: config.management.dustSweepMinUsd,
+              slippage_bps: config.management.dustSweepSlippageBps,
+              skip_mints: activeMints,
+            });
+            if (sweep.swept?.length) {
+              result.dust_swept = sweep.swept.length;
+              result.dust_swept_usd = sweep.total_swept_usd;
+            }
+          } catch (e) {
+            log("executor_warn", `Dust sweep after close failed: ${e.message}`);
+          }
+        }
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
         try {
           const balances = await getWalletBalances({});
           const token = balances.tokens?.find(t => t.mint === result.base_mint);
           if (token && token.usd >= 0.10) {
             log("executor", `Auto-swapping claimed ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd.toFixed(2)}) back to SOL`);
-            await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
+            await swapToken({
+              input_mint: result.base_mint,
+              output_mint: "SOL",
+              amount: token.balance,
+              slippage_bps: config.management.dustSweepSlippageBps,
+            });
           }
         } catch (e) {
           log("executor_warn", `Auto-swap after claim failed: ${e.message}`);
+        }
+        // Sweep dust after claim too — only skip mints that are still in active positions
+        if (config.management.dustSweepEnabled) {
+          try {
+            const positions = await getMyPositions({ force: true });
+            const activeMints = (positions.positions || []).map(p => p.base_mint).filter(Boolean);
+            await sweepDust({
+              min_usd: config.management.dustSweepMinUsd,
+              slippage_bps: config.management.dustSweepSlippageBps,
+              skip_mints: activeMints,
+            });
+          } catch (e) {
+            log("executor_warn", `Dust sweep after claim failed: ${e.message}`);
+          }
         }
       }
     }

@@ -365,8 +365,41 @@ WARNING: This executes a real on-chain transaction.`,
             type: "number",
             description: "Amount of input token to swap (in human-readable units, not lamports)"
           },
+          slippage_bps: {
+            type: "number",
+            description: "Optional slippage tolerance in basis points (50 = 0.5%, 500 = 5%). Defaults to Jupiter's auto-slippage."
+          },
         },
         required: ["input_mint", "output_mint", "amount"]
+      }
+    }
+  },
+
+  {
+    type: "function",
+    function: {
+      name: "sweep_dust",
+      description: `Sweep all SPL token dust in the wallet to SOL.
+Walks every token, skips SOL/USDC/USDT and any mint currently held in an active LP position,
+then swaps each remaining token (above min_usd) to SOL with generous slippage.
+Per-token failures are tolerated — one failed token does not block the others.
+
+Use this when you notice dust accumulating in the wallet (e.g. previous swap attempts
+failed silently due to thin liquidity, or tokens were left below the auto-swap threshold).
+Already runs automatically after close_position and claim_fees when dustSweepEnabled is true.`,
+      parameters: {
+        type: "object",
+        properties: {
+          min_usd: {
+            type: "number",
+            description: "Skip tokens below this USD value (default from config.dustSweepMinUsd, typically 0.05)"
+          },
+          slippage_bps: {
+            type: "number",
+            description: "Slippage tolerance in basis points (default from config.dustSweepSlippageBps, typically 500 = 5%)"
+          },
+        },
+        required: []
       }
     }
   },

@@ -145,6 +145,7 @@ export async function swapToken({
   input_mint,
   output_mint,
   amount,
+  slippage_bps,
 }) {
   input_mint  = normalizeMint(input_mint);
   output_mint = normalizeMint(output_mint);
@@ -183,6 +184,9 @@ export async function swapToken({
       amount: amountStr,
       taker: wallet.publicKey.toString(),
     });
+    if (Number.isFinite(slippage_bps) && slippage_bps > 0) {
+      search.set("slippageBps", String(Math.min(Math.round(slippage_bps), 5000)));
+    }
     const referralParams = getJupiterReferralParams();
     if (referralParams) {
       search.set("referralAccount", referralParams.referralAccount);
@@ -253,4 +257,79 @@ export async function swapToken({
     log("swap_error", error.message);
     return { success: false, error: error.message };
   }
+}
+
+/**
+ * Sweep all SPL token dust to SOL.
+ * Walks every token in the wallet, skips quote tokens (SOL/USDC) and any
+ * mints in `skip_mints` (typically active LP base mints), then swaps each
+ * remaining token > `min_usd` back to SOL with generous slippage.
+ *
+ * Per-token try/catch so one failure does not stop the rest.
+ *
+ * @param {Object} opts
+ * @param {number} [opts.min_usd=0.05]      — skip tokens below this USD value
+ * @param {number} [opts.slippage_bps=500]  — slippage tolerance for thin liquidity (max 5000)
+ * @param {string[]} [opts.skip_mints=[]]   — additional mints to skip (e.g. active position base mints)
+ */
+export async function sweepDust({
+  min_usd = 0.05,
+  slippage_bps = 500,
+  skip_mints = [],
+} = {}) {
+  const balances = await getWalletBalances();
+  if (balances.error) {
+    return { success: false, error: balances.error, swept: [], skipped: [], failed: [] };
+  }
+
+  const excluded = new Set([
+    config.tokens.SOL,
+    config.tokens.USDC,
+    config.tokens.USDT,
+    "SOL",
+    ...(skip_mints || []).filter(Boolean),
+  ]);
+
+  const swept = [];
+  const skipped = [];
+  const failed = [];
+
+  for (const token of balances.tokens || []) {
+    if (!token?.mint || !token?.balance || token.balance <= 0) continue;
+    if (excluded.has(token.mint)) continue;
+    const usd = Number(token.usd ?? 0);
+    if (!Number.isFinite(usd) || usd < min_usd) {
+      skipped.push({ mint: token.mint, symbol: token.symbol, usd, reason: `below ${min_usd} USD` });
+      continue;
+    }
+
+    try {
+      const result = await swapToken({
+        input_mint: token.mint,
+        output_mint: SOL_MINT,
+        amount: token.balance,
+        slippage_bps,
+      });
+      if (result?.success) {
+        swept.push({ mint: token.mint, symbol: token.symbol, usd, tx: result.tx, sol_out: result.amount_out });
+        log("dust_sweep", `Swept ${token.symbol || token.mint.slice(0, 8)} ($${usd.toFixed(2)}) → SOL (tx ${result.tx?.slice(0, 8) || "?"})`);
+      } else {
+        failed.push({ mint: token.mint, symbol: token.symbol, usd, error: result?.error || "unknown" });
+        log("dust_sweep_warn", `Failed ${token.symbol || token.mint.slice(0, 8)}: ${result?.error || "unknown"}`);
+      }
+    } catch (e) {
+      failed.push({ mint: token.mint, symbol: token.symbol, usd, error: e.message });
+      log("dust_sweep_warn", `Threw for ${token.symbol || token.mint.slice(0, 8)}: ${e.message}`);
+    }
+  }
+
+  const totalSweptUsd = swept.reduce((s, t) => s + (t.usd || 0), 0);
+  log("dust_sweep", `Sweep complete: ${swept.length} swept ($${totalSweptUsd.toFixed(2)}), ${skipped.length} skipped, ${failed.length} failed`);
+  return {
+    success: true,
+    swept,
+    skipped,
+    failed,
+    total_swept_usd: Math.round(totalSweptUsd * 100) / 100,
+  };
 }
