@@ -14,7 +14,7 @@ import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
 import { setPositionInstruction } from "../state.js";
 
-import { getPoolMemory, addPoolNote } from "../pool-memory.js";
+import { getPoolMemory, addPoolNote, countRecentDeploys } from "../pool-memory.js";
 import { addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy } from "../strategy-library.js";
 import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../token-blacklist.js";
 import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
@@ -454,6 +454,19 @@ async function runSafetyChecks(name, args) {
           return {
             pass: false,
             reason: `Already holding base token ${args.base_mint} in another pool. One position per token only.`,
+          };
+        }
+      }
+
+      // Cap repeated deploys on the same pool within a 24h window — blocks trend-chasing
+      // (e.g. HIGHER-SOL: 4 deploys in 6 days, each at progressively higher bins, ended -1.46% net)
+      const deployCap = config.risk.maxDeploysPerPool24h;
+      if (deployCap != null && deployCap > 0 && args.pool_address) {
+        const recentCount = countRecentDeploys(args.pool_address, 24);
+        if (recentCount >= deployCap) {
+          return {
+            pass: false,
+            reason: `Pool ${args.pool_address} already had ${recentCount} closed deploy(s) in the last 24h (cap: ${deployCap}). Wait or pick a different pool.`,
           };
         }
       }

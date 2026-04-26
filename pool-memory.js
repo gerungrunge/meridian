@@ -184,6 +184,24 @@ export function isPoolOnCooldown(poolAddress) {
   return new Date(entry.cooldown_until) > new Date();
 }
 
+/**
+ * Count deploys on a pool that opened or closed within the last `withinHours`.
+ * Used to cap trend-chasing — same pool deployed repeatedly within a short window.
+ */
+export function countRecentDeploys(poolAddress, withinHours = 24) {
+  if (!poolAddress) return 0;
+  const db = load();
+  const entry = db[poolAddress];
+  if (!entry?.deploys?.length) return 0;
+  const cutoff = Date.now() - withinHours * 60 * 60 * 1000;
+  return entry.deploys.filter((d) => {
+    const ts = d.deployed_at || d.closed_at;
+    if (!ts) return false;
+    const t = new Date(ts).getTime();
+    return Number.isFinite(t) && t >= cutoff;
+  }).length;
+}
+
 export function isBaseMintOnCooldown(baseMint) {
   if (!baseMint) return false;
   const db = load();

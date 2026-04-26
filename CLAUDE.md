@@ -140,6 +140,7 @@ Before `deploy_position` executes:
 - Position count must be below `maxPositions` (force-fresh scan, no cache)
 - No duplicate pool allowed (same pool_address)
 - No duplicate base token allowed (same base_mint in another pool)
+- Same pool 24h cap: `countRecentDeploys(pool, 24) < maxDeploysPerPool24h` (default 2; set 0/null to disable). Blocks trend-chasing — repeated redeploys on the same pool within 24h.
 - If `amount_x > 0`: strip `amount_y` and `amount_sol` (tokenX-only deploy — no SOL needed)
 - SOL balance must cover `amount_y + gasReserve` (skipped for tokenX-only)
 - `blockedLaunchpads` enforced in `getTopCandidates()` before LLM sees candidates

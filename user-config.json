@@ -27,6 +27,7 @@
   "maxDeployAmount": 1.5,
   "gasReserve": 0.06,
   "positionSizePct": 0.90,
+  "maxDeploysPerPool24h": 2,
 
   "strategy": "bid_ask",
   "binsBelow": 35,

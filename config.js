@@ -75,6 +75,7 @@ export const config = {
   risk: {
     maxPositions:    e.maxPositions    ?? u.maxPositions    ?? 3,
     maxDeployAmount: e.maxDeployAmount ?? u.maxDeployAmount ?? 50,
+    maxDeploysPerPool24h: u.maxDeploysPerPool24h ?? 2, // cap trend-chasing on the same pool; 0/null disables
   },
 
   // ─── Pool Screening Thresholds ───────────
