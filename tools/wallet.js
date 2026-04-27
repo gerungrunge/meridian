@@ -296,7 +296,9 @@ export async function sweepDust({
 
   for (const token of balances.tokens || []) {
     if (!token?.mint || !token?.balance || token.balance <= 0) continue;
-    if (excluded.has(token.mint)) continue;
+    // Normalize first — Helius may return SOL with a non-canonical mint (native, So1… variant)
+    // that bypasses the excluded set and only collapses inside swapToken's normalizeMint.
+    if (excluded.has(normalizeMint(token.mint))) continue;
     const usd = Number(token.usd ?? 0);
     if (!Number.isFinite(usd) || usd < min_usd) {
       skipped.push({ mint: token.mint, symbol: token.symbol, usd, reason: `below ${min_usd} USD` });
