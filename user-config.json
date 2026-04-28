@@ -1,5 +1,9 @@
 {
   "_changelog": {
+    "_note_r7": "2026-04-28 R7 profit-capture micro-tweaks: Apr 26-27 zero losses with current risk config. Loosen exit thresholds slightly to let winners run further per position. Strategy unchanged (maxPositions=1, positionSizePct=0.90, all risk caps preserved). Target: lift avg/position from ~$0.13 to ~$0.18-0.22.",
+    "r7_winner_capture": "feeYieldClosePct=5.0 (from 4.5), feeYieldEvalPct=2.5 (from 2.0), trailingDropPct=1.5 (from 1.2)",
+    "r7_responsiveness": "managementIntervalMin=7 (from 10) — tighter peak tracking + faster decay detection",
+    "r7_compound_velocity": "minClaimAmount=0.3 (from 0.5 USD) — claim small fees more often, return SOL to wallet sooner",
     "_note": "2026-04-25 R6.1 hotfix: vol floor was rejecting ALL candidates because API returns vol=0 for fresh/sleepy pools. 70 minutes zero-deploy after first close (发财-SOL @ 0.97% low yield). Fix: only reject when vol > 0 AND < 1.5 (treat 0/null as 'unknown', let through).",
     "_note_r6": "2026-04-25 R6: hard volatility floor in screening.js (was prompt-only, LLM ignored — PNL25 showed 5/5 deploys violated it: vol 1.00-1.27, bin_step 80-100, all closed in 12-17min with $0 fees).",
     "r6_volatility_floor": "minVolatility=1.5, volatilityCompensateBinStep=125 — drop pools with vol<1.5 unless bin_step>=125",
@@ -73,7 +77,7 @@
   "minVolatility": 1.5,
   "volatilityCompensateBinStep": 125,
 
-  "minClaimAmount": 0.5,
+  "minClaimAmount": 0.3,
   "autoSwapAfterClaim": true,
   "dustSweepEnabled": true,
   "dustSweepMinUsd": 0.05,
@@ -92,8 +96,8 @@
   "emergencyPriceDropPct": -12,
 
   "takeProfitPct": 5,
-  "feeYieldEvalPct": 2.0,
-  "feeYieldClosePct": 4.5,
+  "feeYieldEvalPct": 2.5,
+  "feeYieldClosePct": 5.0,
   "feeYieldEmergencyPct": 5.5,
 
   "minFeePerTvl24h": 6,
@@ -101,7 +105,7 @@
 
   "trailingTakeProfit": true,
   "trailingTriggerPct": 2.5,
-  "trailingDropPct": 1.2,
+  "trailingDropPct": 1.5,
 
   "pnlSanityMaxDiffPct": 5,
 
@@ -115,7 +119,7 @@
   "deadPoolMaxMinutes": 60,
   "deadPoolMinYieldPct": 1.8,
 
-  "managementIntervalMin": 10,
+  "managementIntervalMin": 7,
   "screeningIntervalMin": 15,
   "healthCheckIntervalMin": 30,
 
