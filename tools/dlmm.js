@@ -413,31 +413,51 @@ export async function deployPosition({
     };
   }
 
-  // Enrich learning metadata if LLM didn't pass it — without this, evolveThresholds()
-  // gets null fields and silently filters them out, halting the learning loop.
-  if (volatility == null || fee_tvl_ratio == null || organic_score == null) {
-    try {
-      const { getPoolDetail } = await import("./screening.js");
-      const detail = await getPoolDetail({ pool_address, timeframe: config.screening.timeframe });
-      if (detail) {
-        if (volatility == null && Number.isFinite(detail.volatility)) volatility = detail.volatility;
-        if (fee_tvl_ratio == null) {
-          if (Number.isFinite(detail.fee_active_tvl_ratio) && detail.fee_active_tvl_ratio > 0) {
-            fee_tvl_ratio = detail.fee_active_tvl_ratio;
-          } else if (Number.isFinite(detail.fee) && Number.isFinite(detail.active_tvl) && detail.active_tvl > 0) {
-            fee_tvl_ratio = (detail.fee / detail.active_tvl) * 100;
-          }
+  // Always fetch fresh pool detail at deploy time to:
+  // 1. Enrich learning metadata if LLM didn't pass it (keeps evolveThresholds() loop fed)
+  // 2. Cross-check LLM-passed values against fresh API data (catch stale screener cache)
+  // SPIKE-SOL postmortem (Apr 29 2026): screener returned vol=3.77, fresh getPoolDetail
+  // returned vol=0.70. LLM deployed on stale 3.77 → bid_ask on low-vol pool → -8.18%.
+  let freshVolatility = null;
+  try {
+    const { getPoolDetail } = await import("./screening.js");
+    const detail = await getPoolDetail({ pool_address, timeframe: config.screening.timeframe });
+    if (detail) {
+      if (Number.isFinite(detail.volatility)) freshVolatility = detail.volatility;
+      if (volatility == null && Number.isFinite(detail.volatility)) volatility = detail.volatility;
+      if (fee_tvl_ratio == null) {
+        if (Number.isFinite(detail.fee_active_tvl_ratio) && detail.fee_active_tvl_ratio > 0) {
+          fee_tvl_ratio = detail.fee_active_tvl_ratio;
+        } else if (Number.isFinite(detail.fee) && Number.isFinite(detail.active_tvl) && detail.active_tvl > 0) {
+          fee_tvl_ratio = (detail.fee / detail.active_tvl) * 100;
         }
-        if (organic_score == null && Number.isFinite(detail.token_x?.organic_score)) {
-          organic_score = detail.token_x.organic_score;
-        }
-        if (bin_step == null && Number.isFinite(detail.dlmm_params?.bin_step)) {
-          bin_step = detail.dlmm_params.bin_step;
-        }
-        log("deploy", `Enriched deploy metadata from pool detail: vol=${volatility} feeTvl=${fee_tvl_ratio?.toFixed?.(4)} organic=${organic_score} binStep=${bin_step}`);
       }
-    } catch (e) {
-      log("deploy_warn", `Pool detail enrichment failed: ${e.message} — learning fields may be null`);
+      if (organic_score == null && Number.isFinite(detail.token_x?.organic_score)) {
+        organic_score = detail.token_x.organic_score;
+      }
+      if (bin_step == null && Number.isFinite(detail.dlmm_params?.bin_step)) {
+        bin_step = detail.dlmm_params.bin_step;
+      }
+      log("deploy", `Enriched deploy metadata from pool detail: vol=${volatility} feeTvl=${fee_tvl_ratio?.toFixed?.(4)} organic=${organic_score} binStep=${bin_step}`);
+    }
+  } catch (e) {
+    log("deploy_warn", `Pool detail enrichment failed: ${e.message} — learning fields may be null`);
+  }
+
+  // Hard volatility floor re-check using fresh API data.
+  // Even if LLM (or stale screener) passed a high vol, abort if the live API value
+  // is below the minVolatility floor. This protects against stale screener cache.
+  {
+    const minVol = config.screening.minVolatility ?? 1.5;
+    const compensateBinStep = config.screening.volatilityCompensateBinStep ?? 125;
+    const effectiveBinStep = bin_step ?? actualBinStep;
+    if (Number.isFinite(freshVolatility) && freshVolatility > 0 && freshVolatility < minVol && effectiveBinStep < compensateBinStep) {
+      const llmVol = Number.isFinite(volatility) ? volatility : null;
+      log("deploy", `Aborted: fresh vol ${freshVolatility.toFixed(2)} < min ${minVol}, bin_step ${effectiveBinStep} < ${compensateBinStep}${llmVol != null && Math.abs(llmVol - freshVolatility) > 0.5 ? ` (LLM passed stale vol=${llmVol.toFixed(2)})` : ""}`);
+      return {
+        success: false,
+        error: `Pool volatility ${freshVolatility.toFixed(2)} is below the minVolatility floor ${minVol} and bin_step ${effectiveBinStep} doesn't compensate (need ≥${compensateBinStep}). Screener data may be stale. Try a higher-volatility pool.`,
+      };
     }
   }
 
@@ -1565,6 +1585,7 @@ export async function closePosition({ position_address, reason }) {
           fee_tvl_ratio: tracked.fee_tvl_ratio || null,
           organic_score: tracked.organic_score || null,
           amount_sol: tracked.amount_sol,
+          deployed_at: tracked.deployed_at || null,
           fees_earned_usd: feesUsd,
           final_value_usd: finalValueUsd,
           initial_value_usd: initialUsd,
@@ -1840,6 +1861,7 @@ export async function closePosition({ position_address, reason }) {
         fee_tvl_ratio: tracked.fee_tvl_ratio || null,
         organic_score: tracked.organic_score || null,
         amount_sol: tracked.amount_sol,
+        deployed_at: tracked.deployed_at || null,
         fees_earned_usd: feesUsd,
         final_value_usd: finalValueUsd,
         initial_value_usd: initialUsd,

@@ -149,7 +149,10 @@ export function recordPoolDeploy(poolAddress, deployData) {
   }
 
   // Set cooldown for low yield closes — pool wasn't profitable enough, don't redeploy soon
-  if (deploy.close_reason === "low yield") {
+  // Match any close reason that mentions "low yield" or "fee/TVL ... < min" pattern
+  // (e.g. "Trailing TP: Low yield: fee/TVL 0.51% < min 6%", "low yield", "Low yield: fee/TVL ...")
+  const closeReasonLower = String(deploy.close_reason || "").toLowerCase();
+  if (closeReasonLower.includes("low yield") || closeReasonLower.includes("fee/tvl")) {
     const cooldownHours = 4;
     const cooldownUntil = setPoolCooldown(entry, cooldownHours, "low yield");
     log("pool-memory", `Cooldown set for ${entry.name} until ${cooldownUntil} (low yield close)`);
