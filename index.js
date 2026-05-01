@@ -14,7 +14,7 @@ import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
 import { getWalletBalances, swapToken } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
-import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
+import { evolveThresholds, getPerformanceSummary, getPerformanceHistory, listLessons } from "./lessons.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
 import { startPolling, stopPolling, sendMessage, sendHTML, notifyOutOfRange, isEnabled as telegramEnabled, createLiveMessage } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
@@ -998,6 +998,9 @@ function formatHelpText() {
     "/set <n> <note> — set note/instruction on position",
     "/config — show important runtime config",
     "/setcfg <key> <value> — update persisted config",
+    "/pnl [hours] — closed positions PnL (default 48h)",
+    "/perfsum — overall performance summary",
+    "/lessons [n] — recent derived lessons (default 10)",
     "/screen — refresh deterministic candidate list",
     "/candidates — show latest cached candidates",
     "/deploy <n> — deploy candidate by cached index",
@@ -1235,6 +1238,81 @@ async function telegramHandler(msg) {
         return;
       }
       await sendMessage(`✅ Updated ${key} = ${JSON.stringify(value)}`).catch(() => {});
+    } catch (e) {
+      await sendMessage(`Error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  const pnlMatch = text.match(/^\/pnl(?:\s+(\d+))?$/i);
+  if (pnlMatch) {
+    try {
+      const hours = pnlMatch[1] ? parseInt(pnlMatch[1]) : 48;
+      const data = getPerformanceHistory({ hours, limit: 100 });
+      if (data.count === 0) {
+        await sendMessage(`No closed positions in last ${hours}h.`);
+        return;
+      }
+      const cur = config.management.solMode ? "◎" : "$";
+      const lines = data.positions.slice().reverse().map((p, i) => {
+        const sign = p.pnl_usd >= 0 ? "+" : "";
+        const pnl = `${sign}${cur}${p.pnl_usd?.toFixed(3) ?? "?"}`;
+        const pct = p.pnl_pct != null ? `${sign}${p.pnl_pct.toFixed(2)}%` : "?";
+        const fees = p.fees_earned_usd != null ? `fees ${cur}${p.fees_earned_usd.toFixed(3)}` : "";
+        const dur = p.minutes_held != null ? `${p.minutes_held}m` : "?";
+        const reason = (p.close_reason || "?").slice(0, 28);
+        return `${i + 1}. ${p.pool_name || "?"} | ${pnl} (${pct}) | ${fees} | ${dur} | ${reason}`;
+      });
+      const header = `📊 Last ${hours}h — ${data.count} closed | total: ${data.total_pnl_usd >= 0 ? "+" : ""}${cur}${data.total_pnl_usd} | win rate: ${data.win_rate_pct}%`;
+      const reasonCounts = {};
+      for (const p of data.positions) {
+        const r = p.close_reason || "unknown";
+        reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+      }
+      const reasonLine = Object.entries(reasonCounts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([r, n]) => `${r}: ${n}`)
+        .join(" | ");
+      await sendMessage(`${header}\n\n${lines.join("\n")}\n\nClose reasons: ${reasonLine}`);
+    } catch (e) {
+      await sendMessage(`Error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  if (text === "/perfsum") {
+    try {
+      const summary = getPerformanceSummary();
+      if (!summary) { await sendMessage("No performance data yet."); return; }
+      const cur = config.management.solMode ? "◎" : "$";
+      await sendMessage([
+        "📈 Performance summary (all-time)",
+        `Closed: ${summary.total_positions_closed}`,
+        `Total PnL: ${summary.total_pnl_usd >= 0 ? "+" : ""}${cur}${summary.total_pnl_usd}`,
+        `Avg PnL: ${summary.avg_pnl_pct >= 0 ? "+" : ""}${summary.avg_pnl_pct}%`,
+        `Avg range efficiency: ${summary.avg_range_efficiency_pct}%`,
+        `Win rate: ${summary.win_rate_pct}%`,
+        `Lessons stored: ${summary.total_lessons}`,
+      ].join("\n"));
+    } catch (e) {
+      await sendMessage(`Error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  const lessonsMatch = text.match(/^\/lessons(?:\s+(\d+))?$/i);
+  if (lessonsMatch) {
+    try {
+      const limit = lessonsMatch[1] ? parseInt(lessonsMatch[1]) : 10;
+      const result = listLessons({ limit });
+      const lessons = result?.lessons || [];
+      if (!lessons.length) { await sendMessage("No lessons yet."); return; }
+      const lines = lessons.slice().reverse().map((l, i) => {
+        const tag = l.pinned ? "📌" : (l.role && l.role !== "all" ? `[${l.role}]` : "•");
+        const tags = l.tags?.length ? ` (${l.tags.join(",")})` : "";
+        return `${i + 1}. ${tag} ${l.rule}${tags}`;
+      });
+      await sendMessage(`🧠 Recent lessons (${lessons.length}/${result.total}):\n\n${lines.join("\n")}`);
     } catch (e) {
       await sendMessage(`Error: ${e.message}`).catch(() => {});
     }
