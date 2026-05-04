@@ -1001,6 +1001,7 @@ function formatHelpText() {
     "/pnl [hours] — closed positions PnL (default 48h)",
     "/perfsum — overall performance summary",
     "/lessons [n] — recent derived lessons (default 10)",
+    "/dist [hours] — close_reason distribution analysis",
     "/screen — refresh deterministic candidate list",
     "/candidates — show latest cached candidates",
     "/deploy <n> — deploy candidate by cached index",
@@ -1294,6 +1295,83 @@ async function telegramHandler(msg) {
         `Win rate: ${summary.win_rate_pct}%`,
         `Lessons stored: ${summary.total_lessons}`,
       ].join("\n"));
+    } catch (e) {
+      await sendMessage(`Error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  const distMatch = text.match(/^\/(dist|distribution)(?:\s+(\d+))?$/i);
+  if (distMatch) {
+    try {
+      const hours = distMatch[2] ? parseInt(distMatch[2]) : 168; // default 7d
+      const data = getPerformanceHistory({ hours, limit: 1000 });
+      if (data.count === 0) {
+        await sendMessage(`No closed positions in last ${hours}h.`);
+        return;
+      }
+      const cur = config.management.solMode ? "◎" : "$";
+
+      // Bucket by close_reason
+      const buckets = {};
+      for (const p of data.positions) {
+        const r = (p.close_reason || "unknown").toUpperCase();
+        if (!buckets[r]) buckets[r] = { count: 0, total: 0, wins: 0, losses: 0, winSum: 0, lossSum: 0, durSum: 0, fees: 0 };
+        const b = buckets[r];
+        b.count++;
+        b.total += p.pnl_usd ?? 0;
+        b.fees += p.fees_earned_usd ?? 0;
+        b.durSum += p.minutes_held ?? 0;
+        if ((p.pnl_usd ?? 0) > 0) { b.wins++; b.winSum += p.pnl_usd; }
+        else { b.losses++; b.lossSum += Math.abs(p.pnl_usd ?? 0); }
+      }
+
+      const rows = Object.entries(buckets)
+        .map(([reason, b]) => ({
+          reason,
+          count: b.count,
+          total: b.total,
+          avg: b.total / b.count,
+          winRate: Math.round((b.wins / b.count) * 100),
+          avgWin: b.wins ? b.winSum / b.wins : 0,
+          avgLoss: b.losses ? b.lossSum / b.losses : 0,
+          avgDur: Math.round(b.durSum / b.count),
+          fees: b.fees,
+        }))
+        .sort((a, b) => b.count - a.count);
+
+      const lines = rows.map((r) => {
+        const sign = r.total >= 0 ? "+" : "";
+        const avgSign = r.avg >= 0 ? "+" : "";
+        return [
+          `[${r.reason}] n=${r.count}  total ${sign}${cur}${r.total.toFixed(2)}  avg ${avgSign}${cur}${r.avg.toFixed(3)}`,
+          `  WR ${r.winRate}%  avgW ${cur}${r.avgWin.toFixed(3)}  avgL ${cur}${r.avgLoss.toFixed(3)}  fees ${cur}${r.fees.toFixed(2)}  ${r.avgDur}m`,
+        ].join("\n");
+      });
+
+      // Aggregate stats
+      const totalWins = data.positions.filter((p) => (p.pnl_usd ?? 0) > 0);
+      const totalLosses = data.positions.filter((p) => (p.pnl_usd ?? 0) <= 0);
+      const avgWin = totalWins.length ? totalWins.reduce((s, p) => s + p.pnl_usd, 0) / totalWins.length : 0;
+      const avgLoss = totalLosses.length ? Math.abs(totalLosses.reduce((s, p) => s + (p.pnl_usd ?? 0), 0) / totalLosses.length) : 0;
+      const payoff = avgLoss > 0 ? avgWin / avgLoss : 0;
+      const profitFactor = totalLosses.length && avgLoss > 0
+        ? totalWins.reduce((s, p) => s + p.pnl_usd, 0) / Math.abs(totalLosses.reduce((s, p) => s + p.pnl_usd, 0))
+        : 0;
+
+      const header = `📊 Distribution last ${hours}h — ${data.count} closes`;
+      const summary = [
+        `Total: ${data.total_pnl_usd >= 0 ? "+" : ""}${cur}${data.total_pnl_usd}  WR ${data.win_rate_pct}%`,
+        `avgW ${cur}${avgWin.toFixed(3)}  avgL ${cur}${avgLoss.toFixed(3)}  payoff ${payoff.toFixed(2)}x  PF ${profitFactor.toFixed(2)}`,
+      ].join("\n");
+
+      // Diagnosis hint
+      let hint = "";
+      if (payoff < 1.0 && data.win_rate_pct < 65) hint = "\n⚠ Payoff <1x AND WR <65%. Losers bigger than winners. Tighten stops or let winners run.";
+      else if (payoff < 0.8) hint = "\n⚠ Payoff <0.8x. Take-profit too early or stop-loss too wide.";
+      else if (data.win_rate_pct < 50) hint = "\n⚠ WR <50%. Entry quality issue — review screening filters.";
+
+      await sendMessage(`${header}\n${summary}\n\n${lines.join("\n\n")}${hint}`);
     } catch (e) {
       await sendMessage(`Error: ${e.message}`).catch(() => {});
     }
