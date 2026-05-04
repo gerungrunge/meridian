@@ -1,6 +1,7 @@
 import fs from "fs";
+import { dataPath } from "./data-dir.js";
 
-const DECISION_LOG_FILE = "./decision-log.json";
+const DECISION_LOG_FILE = dataPath("decision-log.json");
 const MAX_DECISIONS = 100;
 
 function load() {

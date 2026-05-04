@@ -14,7 +14,8 @@
       "Read(//c//**)",
       "Bash(python *)",
       "Bash(pip install *)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(claude plugin *)"
     ]
   }
 }

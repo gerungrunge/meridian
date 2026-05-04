@@ -8,8 +8,9 @@
 import fs from "fs";
 import { log } from "./logger.js";
 import { config } from "./config.js";
+import { dataPath } from "./data-dir.js";
 
-const POOL_MEMORY_FILE = "./pool-memory.json";
+const POOL_MEMORY_FILE = dataPath("pool-memory.json");
 const MAX_NOTE_LENGTH = 280;
 
 function sanitizeStoredNote(text, maxLen = MAX_NOTE_LENGTH) {

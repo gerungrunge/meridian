@@ -8,8 +8,9 @@
 
 import fs from "fs";
 import { log } from "./logger.js";
+import { dataPath } from "./data-dir.js";
 
-const BLOCKLIST_FILE = "./dev-blocklist.json";
+const BLOCKLIST_FILE = dataPath("dev-blocklist.json");
 
 function load() {
   if (!fs.existsSync(BLOCKLIST_FILE)) return {};

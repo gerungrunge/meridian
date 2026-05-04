@@ -11,8 +11,9 @@
 
 import fs from "fs";
 import { log } from "./logger.js";
+import { dataPath } from "./data-dir.js";
 
-const WEIGHTS_FILE = "./signal-weights.json";
+const WEIGHTS_FILE = dataPath("signal-weights.json");
 
 // ─── Signal Definitions ─────────────────────────────────────────
 
