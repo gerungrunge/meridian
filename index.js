@@ -25,7 +25,7 @@ import { checkSmartWalletsOnPool } from "./smart-wallets.js";
 import { getTokenNarrative, getTokenInfo } from "./tools/token.js";
 import { stageSignals } from "./signal-tracker.js";
 import { getWeightsSummary } from "./signal-weights.js";
-import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync } from "./hivemind.js";
+import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync, getHiveMindStatus } from "./hivemind.js";
 import { appendDecision } from "./decision-log.js";
 import { getIndicatorSummary, checkEntryConfirmation, checkExitConfirmation } from "./chart-indicators.js";
 
@@ -1002,6 +1002,7 @@ function formatHelpText() {
     "/perfsum — overall performance summary",
     "/lessons [n] — recent derived lessons (default 10)",
     "/dist [hours] — close_reason distribution analysis",
+    "/hivestatus — hive mind connection + cache status",
     "/screen — refresh deterministic candidate list",
     "/candidates — show latest cached candidates",
     "/deploy <n> — deploy candidate by cached index",
@@ -1391,6 +1392,31 @@ async function telegramHandler(msg) {
         return `${i + 1}. ${tag} ${l.rule}${tags}`;
       });
       await sendMessage(`🧠 Recent lessons (${lessons.length}/${result.total}):\n\n${lines.join("\n")}`);
+    } catch (e) {
+      await sendMessage(`Error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  if (text === "/hivestatus" || text === "/hive") {
+    try {
+      const s = getHiveMindStatus();
+      const lines = [
+        "🐝 Hive Mind Status",
+        `Enabled: ${s.enabled ? "✅ YES" : "❌ NO"}`,
+        `URL: ${s.url || "(not set)"}`,
+        `API Key: ${s.hasApiKey ? "✅ set" : "❌ missing"}`,
+        `Pull Mode: ${s.pullMode}`,
+        `Agent ID: ${s.agentId || "(none)"}`,
+        `Cached Lessons: ${s.cachedLessons}`,
+        `Cached Presets: ${s.cachedPresets}`,
+        `Last Pull: ${s.lastPulledAt || "never"}`,
+      ];
+      if (!s.enabled) {
+        lines.push("");
+        lines.push("⚠ Set HIVE_MIND_URL + HIVE_MIND_API_KEY env vars in Dokploy to enable.");
+      }
+      await sendMessage(lines.join("\n"));
     } catch (e) {
       await sendMessage(`Error: ${e.message}`).catch(() => {});
     }

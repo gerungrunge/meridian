@@ -85,6 +85,23 @@ export function getHiveMindPullMode() {
   return getPullMode();
 }
 
+export function getHiveMindStatus() {
+  const url = getBaseUrl();
+  const hasKey = !!getApiKey();
+  const enabled = !!(url && hasKey);
+  const cache = readCache();
+  return {
+    enabled,
+    url: url || null,
+    hasApiKey: hasKey,
+    pullMode: getPullMode(),
+    agentId: config.hiveMind?.agentId || null,
+    cachedLessons: Array.isArray(cache.sharedLessons) ? cache.sharedLessons.length : 0,
+    cachedPresets: Array.isArray(cache.presets) ? cache.presets.length : 0,
+    lastPulledAt: cache.pulledAt || null,
+  };
+}
+
 export function isHiveMindEnabled() {
   return !!(getBaseUrl() && getApiKey());
 }
