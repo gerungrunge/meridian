@@ -33,7 +33,13 @@ log("startup", "DLMM LP Agent starting...");
 log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
 log("startup", `Model: ${process.env.LLM_MODEL || "nousresearch/hermes-3-llama-3.1-405b"}`);
 ensureAgentId();
-bootstrapHiveMind().catch((error) => log("hivemind_warn", `Bootstrap failed: ${error.message}`));
+const _hiveStatus = getHiveMindStatus();
+log("startup", `Hive Mind: ${_hiveStatus.enabled ? `ENABLED (${_hiveStatus.url})` : "DISABLED"}`);
+bootstrapHiveMind()
+  .then((result) => {
+    if (result?.enabled) log("hivemind", `Bootstrap OK — agentId=${result.agentId} pullMode=${result.pullMode}`);
+  })
+  .catch((error) => log("hivemind_warn", `Bootstrap failed: ${error.message}`));
 startHiveMindBackgroundSync();
 
 const TP_PCT = config.management.takeProfitPct;
