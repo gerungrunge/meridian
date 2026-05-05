@@ -746,3 +746,109 @@ export function getPerformanceSummary() {
     total_lessons: data.lessons.length,
   };
 }
+
+/**
+ * Pool leaderboard — group performance by pool, sort by total PnL.
+ * @param {Object} opts
+ * @param {"winners"|"losers"} [opts.mode="winners"]
+ * @param {number} [opts.limit=10]
+ */
+export function getPoolLeaderboard({ mode = "winners", limit = 10 } = {}) {
+  const data = load();
+  const p = data.performance || [];
+  if (p.length === 0) return [];
+
+  const buckets = new Map();
+  for (const r of p) {
+    const key = r.pool || r.pool_name || "unknown";
+    if (!buckets.has(key)) {
+      buckets.set(key, {
+        pool: r.pool || null,
+        pool_name: r.pool_name || null,
+        count: 0,
+        wins: 0,
+        total_pnl_usd: 0,
+        total_fees_usd: 0,
+        last_close_at: null,
+      });
+    }
+    const b = buckets.get(key);
+    b.count++;
+    if ((r.pnl_usd ?? 0) > 0) b.wins++;
+    b.total_pnl_usd += r.pnl_usd ?? 0;
+    b.total_fees_usd += r.fees_earned_usd ?? 0;
+    if (!b.last_close_at || r.recorded_at > b.last_close_at) {
+      b.last_close_at = r.recorded_at;
+    }
+    if (!b.pool_name && r.pool_name) b.pool_name = r.pool_name;
+  }
+
+  const arr = Array.from(buckets.values()).map((b) => ({
+    ...b,
+    total_pnl_usd: Math.round(b.total_pnl_usd * 100) / 100,
+    total_fees_usd: Math.round(b.total_fees_usd * 100) / 100,
+    win_rate_pct: b.count > 0 ? Math.round((b.wins / b.count) * 100) : 0,
+    avg_pnl_usd: b.count > 0 ? Math.round((b.total_pnl_usd / b.count) * 100) / 100 : 0,
+  }));
+
+  arr.sort((a, b) => mode === "losers" ? a.total_pnl_usd - b.total_pnl_usd : b.total_pnl_usd - a.total_pnl_usd);
+  return arr.slice(0, limit);
+}
+
+/**
+ * Risk snapshot — daily/weekly PnL, drawdown, exposure.
+ */
+export function getRiskSnapshot() {
+  const data = load();
+  const p = (data.performance || []).slice().sort((a, b) => (a.recorded_at || "").localeCompare(b.recorded_at || ""));
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  const cutoff24 = new Date(now - day).toISOString();
+  const cutoff7d = new Date(now - 7 * day).toISOString();
+  const cutoff30d = new Date(now - 30 * day).toISOString();
+
+  const last24 = p.filter((r) => r.recorded_at >= cutoff24);
+  const last7d = p.filter((r) => r.recorded_at >= cutoff7d);
+  const last30d = p.filter((r) => r.recorded_at >= cutoff30d);
+
+  const sumPnl = (arr) => arr.reduce((s, x) => s + (x.pnl_usd ?? 0), 0);
+  const sumFees = (arr) => arr.reduce((s, x) => s + (x.fees_earned_usd ?? 0), 0);
+
+  // Max drawdown from cumulative equity curve in 7d
+  let peak = 0;
+  let cumulative = 0;
+  let maxDrawdown = 0;
+  let currentDrawdown = 0;
+  for (const r of last7d) {
+    cumulative += r.pnl_usd ?? 0;
+    if (cumulative > peak) peak = cumulative;
+    const dd = peak - cumulative;
+    if (dd > maxDrawdown) maxDrawdown = dd;
+    currentDrawdown = dd;
+  }
+
+  // Worst single loss
+  const losses = last7d.filter((r) => (r.pnl_usd ?? 0) < 0);
+  const worstLoss = losses.length > 0 ? Math.min(...losses.map((r) => r.pnl_usd ?? 0)) : 0;
+
+  // Loss streak — consecutive losers from end
+  let lossStreak = 0;
+  for (let i = p.length - 1; i >= 0; i--) {
+    if ((p[i].pnl_usd ?? 0) < 0) lossStreak++;
+    else break;
+  }
+
+  return {
+    pnl_24h: Math.round(sumPnl(last24) * 100) / 100,
+    pnl_7d: Math.round(sumPnl(last7d) * 100) / 100,
+    pnl_30d: Math.round(sumPnl(last30d) * 100) / 100,
+    fees_24h: Math.round(sumFees(last24) * 100) / 100,
+    fees_7d: Math.round(sumFees(last7d) * 100) / 100,
+    closes_24h: last24.length,
+    closes_7d: last7d.length,
+    max_drawdown_7d_usd: Math.round(maxDrawdown * 100) / 100,
+    current_drawdown_usd: Math.round(currentDrawdown * 100) / 100,
+    worst_single_loss_7d: Math.round(worstLoss * 100) / 100,
+    loss_streak: lossStreak,
+  };
+}

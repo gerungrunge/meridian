@@ -14,7 +14,7 @@ import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
 import { getWalletBalances, swapToken } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
-import { evolveThresholds, getPerformanceSummary, getPerformanceHistory, listLessons } from "./lessons.js";
+import { evolveThresholds, getPerformanceSummary, getPerformanceHistory, listLessons, getPoolLeaderboard, getRiskSnapshot } from "./lessons.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
 import { startPolling, stopPolling, sendMessage, sendHTML, notifyOutOfRange, isEnabled as telegramEnabled, createLiveMessage } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
@@ -1008,6 +1008,9 @@ function formatHelpText() {
     "/perfsum — overall performance summary",
     "/lessons [n] — recent derived lessons (default 10)",
     "/dist [hours] — close_reason distribution analysis",
+    "/winners [n] — top profitable pools (default 10)",
+    "/losers [n] — worst pools historical (default 10)",
+    "/risk — risk dashboard: drawdown, streaks, exposure",
     "/hivestatus — hive mind connection + cache status",
     "/screen — refresh deterministic candidate list",
     "/candidates — show latest cached candidates",
@@ -1398,6 +1401,71 @@ async function telegramHandler(msg) {
         return `${i + 1}. ${tag} ${l.rule}${tags}`;
       });
       await sendMessage(`🧠 Recent lessons (${lessons.length}/${result.total}):\n\n${lines.join("\n")}`);
+    } catch (e) {
+      await sendMessage(`Error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  const winnersMatch = text.match(/^\/winners(?:\s+(\d+))?$/i);
+  if (winnersMatch) {
+    try {
+      const limit = winnersMatch[1] ? parseInt(winnersMatch[1]) : 10;
+      const top = getPoolLeaderboard({ mode: "winners", limit });
+      if (!top.length) { await sendMessage("No closed positions yet."); return; }
+      const cur = config.management.solMode ? "◎" : "$";
+      const lines = top.map((p, i) => {
+        const sign = p.total_pnl_usd >= 0 ? "+" : "";
+        const name = (p.pool_name || (p.pool ? p.pool.slice(0, 8) : "?")).slice(0, 24);
+        return `${i + 1}. ${name} | ${sign}${cur}${p.total_pnl_usd.toFixed(2)} | ${p.count}× | WR ${p.win_rate_pct}% | fees ${cur}${p.total_fees_usd.toFixed(2)}`;
+      });
+      await sendMessage(`🏆 Top ${top.length} winning pools:\n\n${lines.join("\n")}`);
+    } catch (e) {
+      await sendMessage(`Error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  const losersMatch = text.match(/^\/losers(?:\s+(\d+))?$/i);
+  if (losersMatch) {
+    try {
+      const limit = losersMatch[1] ? parseInt(losersMatch[1]) : 10;
+      const bottom = getPoolLeaderboard({ mode: "losers", limit });
+      if (!bottom.length) { await sendMessage("No closed positions yet."); return; }
+      const cur = config.management.solMode ? "◎" : "$";
+      const lines = bottom.map((p, i) => {
+        const sign = p.total_pnl_usd >= 0 ? "+" : "";
+        const name = (p.pool_name || (p.pool ? p.pool.slice(0, 8) : "?")).slice(0, 24);
+        return `${i + 1}. ${name} | ${sign}${cur}${p.total_pnl_usd.toFixed(2)} | ${p.count}× | WR ${p.win_rate_pct}% | avg ${sign}${cur}${p.avg_pnl_usd.toFixed(2)}`;
+      });
+      await sendMessage(`💀 Worst ${bottom.length} pools (blacklist candidates):\n\n${lines.join("\n")}`);
+    } catch (e) {
+      await sendMessage(`Error: ${e.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  if (text === "/risk") {
+    try {
+      const r = getRiskSnapshot();
+      const cur = config.management.solMode ? "◎" : "$";
+      const sign = (n) => n >= 0 ? "+" : "";
+      const ddWarning = r.current_drawdown_usd > 0 ? "⚠️" : "✅";
+      const streakWarning = r.loss_streak >= 3 ? "🔴" : r.loss_streak >= 2 ? "🟡" : "✅";
+      await sendMessage([
+        "🛡 Risk Dashboard",
+        "",
+        "═ PnL ═",
+        `24h: ${sign(r.pnl_24h)}${cur}${r.pnl_24h} (${r.closes_24h} closes, fees ${cur}${r.fees_24h})`,
+        `7d:  ${sign(r.pnl_7d)}${cur}${r.pnl_7d} (${r.closes_7d} closes, fees ${cur}${r.fees_7d})`,
+        `30d: ${sign(r.pnl_30d)}${cur}${r.pnl_30d}`,
+        "",
+        "═ Risk ═",
+        `${ddWarning} Current drawdown: ${cur}${r.current_drawdown_usd}`,
+        `Max drawdown 7d: ${cur}${r.max_drawdown_7d_usd}`,
+        `Worst single loss 7d: ${cur}${r.worst_single_loss_7d}`,
+        `${streakWarning} Loss streak: ${r.loss_streak}`,
+      ].join("\n"));
     } catch (e) {
       await sendMessage(`Error: ${e.message}`).catch(() => {});
     }
