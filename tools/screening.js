@@ -287,8 +287,17 @@ export async function getTopCandidates({ limit = 10 } = {}) {
   const occupiedPools = new Set(positions.map((p) => p.pool));
   const occupiedMints = new Set(positions.map((p) => p.base_mint).filter(Boolean));
 
+  const SOL_MINT = "So11111111111111111111111111111111111111112";
   const eligible = pools
     .filter((p) => {
+      // Hard filter: only SOL-quote pools. Wallet operates in SOL-only mode;
+      // non-SOL quote pools (e.g. DMC-USDC) will fail at chain level with "insufficient funds"
+      // for the missing quote token.
+      if (p.quote?.mint && p.quote.mint !== SOL_MINT) {
+        log("screening", `SOL-only: dropped ${p.name} — quote ${p.quote.symbol} (${p.quote.mint?.slice(0, 8)}) is not SOL`);
+        pushFilteredReason(filteredOut, p, `quote ${p.quote.symbol} not SOL (wallet is SOL-only)`);
+        return false;
+      }
       if (occupiedPools.has(p.pool)) {
         pushFilteredReason(filteredOut, p, "already have an open position in this pool");
         return false;

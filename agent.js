@@ -176,6 +176,10 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
   // These lock after first attempt regardless of success — retrying them is always wrong
   const NO_RETRY_TOOLS = new Set(["deploy_position"]);
   const firedOnce = new Set();
+  // deploy_position: track attempted pool addresses. Block retry to SAME pool
+  // (don't retry on chain failure), but allow retry on a DIFFERENT pool
+  // (e.g. first pick was wrong-quote, second pick is correct).
+  const attemptedDeployPools = new Set();
   const mustUseRealTool = shouldRequireRealToolUse(goal, agentType, interactive);
   let sawToolCall = false;
   let noToolRetryCount = 0;
@@ -312,8 +316,29 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           }
         }
 
-        // Block once-per-session tools from firing a second time
-        if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {
+        // Block once-per-session tools from firing a second time.
+        // Special case: deploy_position blocks per-pool (allows retry on a different pool
+        // when the first attempt failed due to wrong-pool selection, e.g. USDC-quote when
+        // wallet has only SOL). Same pool is still blocked.
+        if (functionName === "deploy_position") {
+          const targetPool = functionArgs?.pool_address;
+          if (targetPool && attemptedDeployPools.has(targetPool)) {
+            const reason = `deploy_position already attempted on pool ${targetPool.slice(0, 8)} this session — do not retry the same pool. Pick a different pool or report the error and stop.`;
+            log("agent", `Blocked duplicate deploy_position call on pool ${targetPool.slice(0, 8)} — already attempted this session`);
+            await onToolFinish?.({
+              name: functionName,
+              args: functionArgs,
+              result: { blocked: true, reason },
+              success: false,
+              step,
+            });
+            return {
+              role: "tool",
+              tool_call_id: toolCall.id,
+              content: JSON.stringify({ blocked: true, reason }),
+            };
+          }
+        } else if (ONCE_PER_SESSION.has(functionName) && firedOnce.has(functionName)) {
           log("agent", `Blocked duplicate ${functionName} call — already executed this session`);
           await onToolFinish?.({
             name: functionName,
@@ -339,11 +364,15 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           step,
         });
 
-        // Lock deploy_position after actual execution (success or runtime failure) —
+        // Lock deploy_position per-pool after actual execution (success or runtime failure) —
         // but NOT after a pre-execution safety block (e.g. bin_step out of range),
-        // so the LLM can retry with a different valid pool in the same session.
-        if (NO_RETRY_TOOLS.has(functionName) && !result?.blocked) firedOnce.add(functionName);
-        else if (ONCE_PER_SESSION.has(functionName) && result.success === true) firedOnce.add(functionName);
+        // so the LLM can retry on a DIFFERENT valid pool in the same session.
+        if (functionName === "deploy_position" && !result?.blocked) {
+          const targetPool = functionArgs?.pool_address;
+          if (targetPool) attemptedDeployPools.add(targetPool);
+          // Also lock global flag on success — one successful deploy per session is enough.
+          if (result?.success === true) firedOnce.add(functionName);
+        } else if (ONCE_PER_SESSION.has(functionName) && result.success === true) firedOnce.add(functionName);
 
         return {
           role: "tool",

@@ -111,11 +111,25 @@ export async function sendHTML(html) {
   return postTelegram("sendMessage", { text: html.slice(0, 4096), parse_mode: "HTML" });
 }
 
+// Dedupe cache: skip editMessageText calls when the new text exactly matches the
+// last text we sent for the same message_id. Telegram returns 400 "message is not
+// modified" otherwise, which spams logs.
+const _lastEditTextByMessageId = new Map();
+
 export async function editMessage(text, messageId) {
   if (!TOKEN || !chatId || !messageId) return null;
+  const truncated = String(text).slice(0, 4096);
+  const cached = _lastEditTextByMessageId.get(messageId);
+  if (cached === truncated) return null;
+  _lastEditTextByMessageId.set(messageId, truncated);
+  // Cap cache to last 100 messages to bound memory
+  if (_lastEditTextByMessageId.size > 100) {
+    const firstKey = _lastEditTextByMessageId.keys().next().value;
+    _lastEditTextByMessageId.delete(firstKey);
+  }
   return postTelegram("editMessageText", {
     message_id: messageId,
-    text: String(text).slice(0, 4096),
+    text: truncated,
   });
 }
 
