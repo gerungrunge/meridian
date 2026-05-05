@@ -174,6 +174,9 @@ const toolMap = {
       maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
       athFilterPct:     ["screening", "athFilterPct"],
       maxVolatility:    ["screening", "maxVolatility"],
+      minVolatility:    ["screening", "minVolatility"],
+      volatilityCompensateBinStep: ["screening", "volatilityCompensateBinStep"],
+      minVolumeActiveTvlRatio5m: ["screening", "minVolumeActiveTvlRatio5m"],
       minFeePerTvl24h: ["management", "minFeePerTvl24h"],
       // management
       minClaimAmount: ["management", "minClaimAmount"],

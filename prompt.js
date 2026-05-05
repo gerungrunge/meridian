@@ -97,6 +97,13 @@ TOKEN TAGS (from OKX advanced-info):
 
 IMPORTANT: fee_active_tvl_ratio values are ALREADY in percentage form. 0.29 = 0.29%. Do NOT multiply by 100. A value of 1.0 = 1.0%, a value of 22 = 22%. Never convert.
 
+VOL/TVL RATIO (alpha LP heuristic) — vol_active_tvl_ratio is volume_window divided by active_tvl. Measures how aggressively the pool churns liquidity.
+  - 5x+ = elite. Pool processes 5× its active liquidity per timeframe window. Highest fee territory.
+  - 2-5x = good. Worth deploying with tight range.
+  - 0.5-2x = mediocre. Fees may not outpace IL on volatile tokens.
+  - < 0.5x = avoid. Too slow.
+A pool with high vol/tvl ratio AND tight bins ≈ consistent printer. Prioritize this over raw TVL or volume size.
+
 Current screening timeframe: ${config.screening.timeframe} — interpret all metrics relative to this window.
 
 `;

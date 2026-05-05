@@ -319,6 +319,18 @@ export async function getTopCandidates({ limit = 10 } = {}) {
           return false;
         }
       }
+      // 5min volume / active_tvl ratio — alpha LP heuristic.
+      // Pools below this ratio earn fees too slowly to outpace IL on tight ranges.
+      // 5x ratio means pool churns 5× its active liquidity per timeframe window.
+      const minVolTvlRatio = config.screening.minVolumeActiveTvlRatio5m;
+      if (minVolTvlRatio != null && minVolTvlRatio > 0 && p.active_tvl > 0) {
+        const ratio = p.volume_window / p.active_tvl;
+        if (ratio < minVolTvlRatio) {
+          log("screening", `Vol/TVL ratio: dropped ${p.name} — ${ratio.toFixed(2)}x < ${minVolTvlRatio}x (vol ${p.volume_window} / active_tvl ${p.active_tvl})`);
+          pushFilteredReason(filteredOut, p, `vol/active_tvl ${ratio.toFixed(2)}x < ${minVolTvlRatio}x min`);
+          return false;
+        }
+      }
       return true;
     })
     .sort((a, b) => scoreCandidate(b) - scoreCandidate(a))
@@ -546,6 +558,8 @@ function condensePool(p) {
     fee_active_tvl_ratio: p.fee_active_tvl_ratio > 0
       ? fix(p.fee_active_tvl_ratio, 4)
       : (p.active_tvl > 0 ? fix((p.fee / p.active_tvl) * 100, 4) : 0),
+    // Alpha LP heuristic: volume churn vs active liquidity per 5min window. 5x+ = high-fee territory
+    vol_active_tvl_ratio: p.active_tvl > 0 ? fix((p.volume || 0) / p.active_tvl, 2) : 0,
     volatility: fix(p.volatility, 2),
 
 

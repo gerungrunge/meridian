@@ -110,6 +110,7 @@ export const config = {
     maxVolatility:      u.maxVolatility      ?? 15.0, // max pool volatility ceiling (auto-evolved)
     minVolatility:      u.minVolatility      ?? 1.5,  // hard floor — pools below earn ~$0 fees unless bin_step compensates
     volatilityCompensateBinStep: u.volatilityCompensateBinStep ?? 125, // bin_step >= this allows pools below minVolatility through
+    minVolumeActiveTvlRatio5m: u.minVolumeActiveTvlRatio5m ?? null, // 5min volume / active_tvl ratio gate — alpha LP heuristic, e.g. 5.0 = pool churns 5x active liquidity per window
   },
 
   // ─── Position Management ────────────────
