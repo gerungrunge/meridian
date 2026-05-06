@@ -5,6 +5,7 @@ import { log } from "../logger.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
 import { confirmIndicatorPreset } from "./chart-indicators.js";
 import { getAgentMeridianBase, getAgentMeridianHeaders } from "./agent-meridian.js";
+import { enrichWithLPSignals, observeVolatility } from "../lp-tracker.js";
 
 const DATAPI_JUP = "https://datapi.jup.ag/v1";
 
@@ -20,11 +21,15 @@ function normalizeSymbol(symbol) {
 }
 
 function scoreCandidate(pool) {
-  const feeTvl = Number(pool.fee_active_tvl_ratio || 0);
-  const organic = Number(pool.organic_score || 0);
-  const volume = Number(pool.volume_window || 0);
-  const holders = Number(pool.holders || 0);
-  return feeTvl * 1000 + organic * 10 + volume / 100 + holders / 100;
+  const feeTvl   = Number(pool.fee_active_tvl_ratio || 0);
+  const organic  = Number(pool.organic_score || 0);
+  const volume   = Number(pool.volume_window || 0);
+  const holders  = Number(pool.holders || 0);
+  // LPer boost: +50 per top LPer active in pool (max meaningful ~5 = +250)
+  const lperBoost      = Number(pool.top_lper_count || 0) * 50;
+  // Crowding penalty: when bot's fee share < 3% & pool has many owners → fee diluted
+  const crowdingPenalty = pool.is_crowded ? 200 : 0;
+  return feeTvl * 1000 + organic * 10 + volume / 100 + holders / 100 + lperBoost - crowdingPenalty;
 }
 
 function numeric(value) {
@@ -287,6 +292,9 @@ export async function discoverPools({
   });
 
   const condensed = thresholdedRawPools.map(condensePool);
+
+  // Feed volatility samples for dynamic percentile floor (side-effect, no filter change yet)
+  for (const p of thresholdedRawPools) observeVolatility(p.volatility);
 
   // Hard-filter blacklisted tokens and blocked deployers (what pool discovery already gave us)
   let pools = condensed.filter((p) => {
@@ -556,6 +564,14 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     }
   }
 
+  // LPer signal enrichment — parallel-fetch for top N candidates.
+  // Adds: top_lper_count, suggested_strategy, bot_fee_share_pct, is_crowded.
+  // Re-sort after so crowding penalty and LPer boost affect final order.
+  if (eligible.length > 0) {
+    await enrichWithLPSignals(eligible);
+    eligible.sort((a, b) => scoreCandidate(b) - scoreCandidate(a));
+  }
+
   return {
     candidates: eligible,
     total_screened: pools.length,
@@ -638,6 +654,10 @@ function condensePool(p) {
     // Position health
     active_positions: p.active_positions,
     active_pct: fix(p.active_positions_pct, 1),
+    // avg USD liquidity per active position — crowding proxy
+    active_tvl_per_pos: (p.active_positions > 0 && p.active_tvl > 0)
+      ? round(p.active_tvl / p.active_positions)
+      : null,
     open_positions: p.open_positions,
     discord_signal: Boolean(p.discord_signal),
     discord_signal_count: p.discord_signal_count || 0,
