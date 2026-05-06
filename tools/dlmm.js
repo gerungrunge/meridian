@@ -1906,8 +1906,27 @@ export async function closePosition({ position_address, reason }) {
       base_mint: pool.lbPair.tokenXMint.toString(),
     };
   } catch (error) {
-    log("close_error", error.message);
-    return { success: false, error: error.message };
+    const msg = String(error?.message || "");
+    // 0xbbf = AnchorError AccountOwnedByWrongProgram. Position account already
+    // owned by SystemProgram → already closed on-chain; local state stale.
+    // Untrack to prevent retry loop.
+    const isStaleAccount =
+      msg.includes("0xbbf") ||
+      msg.includes("AccountOwnedByWrongProgram") ||
+      (msg.includes("custom program error") && msg.includes("3007"));
+    if (isStaleAccount) {
+      log("close_warn", `Position ${position_address} already closed on-chain (orphan account). Untracking.`);
+      try { recordClose(position_address, "stale_account_orphaned_on_chain"); } catch {}
+      _positionsCacheAt = 0;
+      return {
+        success: true,
+        stale_account: true,
+        position: position_address,
+        message: "Position was already closed on-chain. Local state cleaned up.",
+      };
+    }
+    log("close_error", msg);
+    return { success: false, error: msg };
   }
 }
 
