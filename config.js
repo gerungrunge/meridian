@@ -257,6 +257,10 @@ export const config = {
  *   3.0 SOL wallet → 0.98 SOL deploy
  *   4.0 SOL wallet → 1.33 SOL deploy
  */
+// Absolute minimum total bins below for any deploy — guards against 1-bin/tiny-range deploys.
+// Cannot be overridden by config. Use config.strategy.minBinsBelow to set the soft floor.
+export const MIN_SAFE_BINS_BELOW = 35;
+
 export function computeDeployAmount(walletSol) {
   const reserve  = config.management.gasReserve      ?? 0.2;
   const pct      = config.management.positionSizePct ?? 0.35;
