@@ -47,6 +47,8 @@
     "maxDeploysPerPool24h":  1,
     "strategy":  "bid_ask",
     "binsBelow":  90,
+    "minBinsBelow":  35,
+    "maxBinsBelow":  90,
     "timeframe":  "5m",
     "category":  "trending",
     "excludeHighSupplyConcentration":  true,

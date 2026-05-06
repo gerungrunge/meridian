@@ -138,7 +138,7 @@ POOL MEMORY: Past losses or problems → strong skip signal.
 
 DEPLOY RULES:
 - COMPOUNDING: Use the deploy amount from the goal EXACTLY. Do NOT default to a smaller number.
-- bins_below = round(35 + (volatility/5)*55) clamped to [35,${config.strategy.binsBelow}]. bins_above = 0.
+- bins_below = round(35 + (volatility/5)*55) clamped to [${config.strategy.minBinsBelow ?? 35},${config.strategy.maxBinsBelow ?? config.strategy.binsBelow}]. bins_above = 0.
 - Bin steps must be [${config.screening.minBinStep}-${config.screening.maxBinStep}].
 - Pick ONE pool. Deploy or explain why none qualify.
 

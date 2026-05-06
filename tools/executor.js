@@ -216,8 +216,11 @@ const toolMap = {
       maxTokens: ["llm", "maxTokens"],
       maxSteps: ["llm", "maxSteps"],
       // strategy
-      strategy: ["strategy", "strategy"],
-      binsBelow: ["strategy", "binsBelow"],
+      strategy:         ["strategy", "strategy"],
+      binsBelow:        ["strategy", "binsBelow"],
+      minBinsBelow:     ["strategy", "minBinsBelow"],
+      maxBinsBelow:     ["strategy", "maxBinsBelow"],
+      defaultBinsBelow: ["strategy", "defaultBinsBelow"],
       // hivemind
       hiveMindUrl: ["hiveMind", "url"],
       hiveMindApiKey: ["hiveMind", "apiKey"],

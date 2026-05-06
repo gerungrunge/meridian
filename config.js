@@ -159,8 +159,11 @@ export const config = {
 
   // ─── Strategy Mapping ───────────────────
   strategy: {
-    strategy:  u.strategy  ?? "bid_ask",
-    binsBelow: u.binsBelow ?? 69,
+    strategy:     u.strategy     ?? "bid_ask",
+    binsBelow:    u.binsBelow    ?? u.maxBinsBelow ?? 69,  // legacy alias
+    minBinsBelow: u.minBinsBelow ?? 35,
+    maxBinsBelow: u.maxBinsBelow ?? u.binsBelow ?? 69,
+    defaultBinsBelow: u.defaultBinsBelow ?? null,
   },
 
   // ─── Scheduling ─────────────────────────
