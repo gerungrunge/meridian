@@ -1,5 +1,8 @@
 {
     "_changelog":  {
+                       "_note_r11":  "2026-05-05 R11 growth-mode: R10 results 24-48h post-tune: 13 closes (vs 8), +◎4.6 (vs +◎2.8), WR 69% (vs 63%), PF 9.85 (vs 7.09). Drought killed. Now push for wallet recovery to 1+ SOL. Two issues observed: (1) binsBelow=35 was both lower AND upper clamp — vol-based scaling formula disabled, all positions got 35 bins regardless of volatility, causing 3 quick PUMPED-above-range exits. (2) DEAD POOL 45m too tight — last close hit dead-pool at 166m for +◎0.77, more time would compound further.",
+                       "r11_unlock_bins":  "binsBelow: 35 → 90 — was acting as both clamp ends, forcing fixed 35-bin range; now formula round(35 + vol/5*55) scales 35 (low vol) to 90 (high vol)",
+                       "r11_dead_pool_extend":  "deadPoolMaxMinutes: 45 → 90 — let slow printers compound (recent 166m hold yielded +◎0.77)",
                        "_note_r10":  "2026-05-05 R10 drought-kill: 7d post-volume-mount data: 8 closes only (drought confirmed — 6 screening cycles found 0 candidates). $48 idle ~80% of time. R9 filters too tight for current market. Wallet 0.62→0.628 SOL = 1.3%/week (slow recovery from 0.98 SOL bug-loss). Loosen entry filters back to pre-R9 + give positions more breathing room before OOR ejection.",
                        "r10_drought_fix":  "minTokenFeesSol: 12 → 8 (revert R9), minOrganic: 55 → 50 (partial revert R9) — let more candidates through screening, capital should not sit idle",
                        "r10_oor_breathe":  "outOfRangeWaitMinutes: 12 → 25 — losers data shows positions ejected at 12-22m OOR with $0 fees; wider window lets price reclaim range before forced close",
@@ -43,7 +46,7 @@
     "positionSizePct":  0.90,
     "maxDeploysPerPool24h":  1,
     "strategy":  "bid_ask",
-    "binsBelow":  35,
+    "binsBelow":  90,
     "timeframe":  "5m",
     "category":  "trending",
     "excludeHighSupplyConcentration":  true,
@@ -106,7 +109,7 @@
     "volumeDecayAlertPct":  30,
     "volumeDecayClosePct":  50,
     "ilPriceMovePct":  10,
-    "deadPoolMaxMinutes":  45,
+    "deadPoolMaxMinutes":  90,
     "deadPoolMinYieldPct":  1.8,
     "managementIntervalMin":  7,
     "screeningIntervalMin":  7,
