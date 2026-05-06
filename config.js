@@ -12,6 +12,24 @@ const DEFAULT_HIVEMIND_API_KEY = DEFAULT_AGENT_MERIDIAN_PUBLIC_KEY;
 const u = fs.existsSync(USER_CONFIG_PATH)
   ? JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"))
   : {};
+export const MIN_SAFE_BINS_BELOW = 35;
+
+function numericConfig(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+const legacyBinsBelow = numericConfig(u.binsBelow);
+const configuredMinBinsBelow = numericConfig(u.minBinsBelow) ?? MIN_SAFE_BINS_BELOW;
+const configuredMaxBinsBelow = numericConfig(u.maxBinsBelow)
+  ?? (legacyBinsBelow != null ? Math.max(legacyBinsBelow, configuredMinBinsBelow) : 69);
+const configuredDefaultBinsBelow = numericConfig(u.defaultBinsBelow) ?? legacyBinsBelow ?? configuredMaxBinsBelow;
+const strategyMinBinsBelow = Math.max(MIN_SAFE_BINS_BELOW, Math.round(configuredMinBinsBelow));
+const strategyMaxBinsBelow = Math.max(strategyMinBinsBelow, Math.round(configuredMaxBinsBelow));
+const strategyDefaultBinsBelow = Math.max(
+  strategyMinBinsBelow,
+  Math.min(strategyMaxBinsBelow, Math.round(configuredDefaultBinsBelow)),
+);
 
 // Apply wallet/RPC from user-config if not already in env
 if (u.rpcUrl)    process.env.RPC_URL            ||= u.rpcUrl;
@@ -34,48 +52,11 @@ function nonEmptyString(...values) {
   return null;
 }
 
-// ─── Environment Variable Overrides ──────────────────────────────
-// Priority: ENV VAR > user-config.json > hardcoded default
-// These cannot be overwritten by bot's self-tune or evolve functions.
-// Set in Dokploy Environment for quick changes without pushing code.
-//
-// Supported env vars:
-//   DEPLOY_AMOUNT_SOL, MAX_POSITIONS, MIN_SOL_TO_OPEN, MAX_DEPLOY_AMOUNT,
-//   GAS_RESERVE, POSITION_SIZE_PCT, STOP_LOSS_PCT, TAKE_PROFIT_PCT,
-//   MANAGEMENT_INTERVAL_MIN, SCREENING_INTERVAL_MIN
-function envNum(envKey) {
-  const val = process.env[envKey];
-  if (val == null || val === "") return undefined;
-  const n = Number(val);
-  return Number.isFinite(n) ? n : undefined;
-}
-function envBool(envKey) {
-  const val = process.env[envKey];
-  if (val == null || val === "") return undefined;
-  return val === "true" || val === "1";
-}
-
-// Apply env overrides on top of user-config values (env wins)
-const e = {
-  deployAmountSol:       envNum("DEPLOY_AMOUNT_SOL"),
-  maxPositions:          envNum("MAX_POSITIONS"),
-  minSolToOpen:          envNum("MIN_SOL_TO_OPEN"),
-  maxDeployAmount:       envNum("MAX_DEPLOY_AMOUNT"),
-  gasReserve:            envNum("GAS_RESERVE"),
-  positionSizePct:       envNum("POSITION_SIZE_PCT"),
-  stopLossPct:           envNum("STOP_LOSS_PCT"),
-  takeProfitPct:         envNum("TAKE_PROFIT_PCT"),
-  managementIntervalMin: envNum("MANAGEMENT_INTERVAL_MIN"),
-  screeningIntervalMin:  envNum("SCREENING_INTERVAL_MIN"),
-  dryRun:                envBool("DRY_RUN_OVERRIDE"),
-};
-
 export const config = {
   // ─── Risk Limits ─────────────────────────
   risk: {
-    maxPositions:    e.maxPositions    ?? u.maxPositions    ?? 3,
-    maxDeployAmount: e.maxDeployAmount ?? u.maxDeployAmount ?? 50,
-    maxDeploysPerPool24h: u.maxDeploysPerPool24h ?? 2, // cap trend-chasing on the same pool; 0/null disables
+    maxPositions:    u.maxPositions    ?? 3,
+    maxDeployAmount: u.maxDeployAmount ?? 50,
   },
 
   // ─── Pool Screening Thresholds ───────────
@@ -107,34 +88,30 @@ export const config = {
     minTokenAgeHours:   u.minTokenAgeHours   ?? null, // null = no minimum
     maxTokenAgeHours:   u.maxTokenAgeHours   ?? null, // null = no maximum
     athFilterPct:       u.athFilterPct       ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
-    maxVolatility:      u.maxVolatility      ?? 15.0, // max pool volatility ceiling (auto-evolved)
-    minVolatility:      u.minVolatility      ?? 1.5,  // hard floor — pools below earn ~$0 fees unless bin_step compensates
-    volatilityCompensateBinStep: u.volatilityCompensateBinStep ?? 125, // bin_step >= this allows pools below minVolatility through
-    minVolumeActiveTvlRatio5m: u.minVolumeActiveTvlRatio5m ?? null, // 5min volume / active_tvl ratio gate — alpha LP heuristic, e.g. 5.0 = pool churns 5x active liquidity per window
   },
 
   // ─── Position Management ────────────────
   management: {
     minClaimAmount:        u.minClaimAmount        ?? 5,
     autoSwapAfterClaim:    u.autoSwapAfterClaim    ?? false,
-    dustSweepEnabled:      u.dustSweepEnabled      ?? true,  // sweep all SPL dust to SOL after close/claim
-    dustSweepMinUsd:       u.dustSweepMinUsd       ?? 0.05,  // skip tokens below this USD value
-    dustSweepSlippageBps:  u.dustSweepSlippageBps  ?? 500,   // generous slippage for thin-liquidity dust (5%)
     outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 10,
     outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 30,
-    minAgeBeforeOOR:       u.minAgeBeforeOOR       ?? 25, // minutes — position must be at least this old before OOR rule can close it
-    minAgeBeforeDecayClose: u.minAgeBeforeDecayClose ?? 30, // minutes — peak_volume needs samples to be trustworthy before decay-close fires
     oorCooldownTriggerCount: u.oorCooldownTriggerCount ?? 3,
     oorCooldownHours:       u.oorCooldownHours       ?? 12,
+    repeatDeployCooldownEnabled: u.repeatDeployCooldownEnabled ?? true,
+    repeatDeployCooldownTriggerCount: u.repeatDeployCooldownTriggerCount ?? 3,
+    repeatDeployCooldownHours: u.repeatDeployCooldownHours ?? 12,
+    repeatDeployCooldownScope: u.repeatDeployCooldownScope ?? "token", // pool | token | both
+    repeatDeployCooldownMinFeeEarnedPct: u.repeatDeployCooldownMinFeeEarnedPct ?? u.repeatDeployCooldownMinFeeYieldPct ?? 0,
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
-    stopLossPct:           e.stopLossPct           ?? u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
-    takeProfitPct:         e.takeProfitPct         ?? u.takeProfitPct         ?? u.takeProfitFeePct ?? 5,
+    stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
+    takeProfitPct:         u.takeProfitPct         ?? u.takeProfitFeePct ?? 5,
     minFeePerTvl24h:       u.minFeePerTvl24h       ?? 7,
     minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close
-    minSolToOpen:          e.minSolToOpen          ?? u.minSolToOpen          ?? 0.55,
-    deployAmountSol:       e.deployAmountSol       ?? u.deployAmountSol       ?? 0.5,
-    gasReserve:            e.gasReserve            ?? u.gasReserve            ?? 0.2,
-    positionSizePct:       e.positionSizePct       ?? u.positionSizePct       ?? 0.35,
+    minSolToOpen:          u.minSolToOpen          ?? 0.55,
+    deployAmountSol:       u.deployAmountSol       ?? 0.5,
+    gasReserve:            u.gasReserve            ?? 0.2,
+    positionSizePct:       u.positionSizePct       ?? 0.35,
     // Trailing take-profit
     trailingTakeProfit:    u.trailingTakeProfit    ?? true,
     trailingTriggerPct:    u.trailingTriggerPct    ?? 3,    // activate trailing at X% PnL
@@ -142,34 +119,20 @@ export const config = {
     pnlSanityMaxDiffPct:   u.pnlSanityMaxDiffPct   ?? 5,    // max allowed diff between reported and derived pnl % before ignoring a tick
     // SOL mode — positions, PnL, and balances reported in SOL instead of USD
     solMode:               u.solMode               ?? false,
-    // ─── Strict Profit Management Rules ────────
-    // Tiered take-profit (fee yield thresholds)
-    feeYieldEvalPct:       u.feeYieldEvalPct       ?? 3,    // fee yield >= X% → evaluate exit
-    feeYieldClosePct:      u.feeYieldClosePct      ?? 5,    // fee yield >= X% → close immediately
-    feeYieldEmergencyPct:  u.feeYieldEmergencyPct  ?? 8,    // fee yield >= X% → emergency close
-    // Volume decay detection
-    volumeDecayAlertPct:   u.volumeDecayAlertPct   ?? 40,   // volume dropped X% from peak → alert
-    volumeDecayClosePct:   u.volumeDecayClosePct   ?? 60,   // volume dropped X% from peak → close
-    // IL protection
-    ilPriceMovePct:        u.ilPriceMovePct        ?? 15,   // price moved X% from entry → check IL
-    // Time-based stop
-    deadPoolMaxMinutes:    u.deadPoolMaxMinutes    ?? 240,  // 4 hours
-    deadPoolMinYieldPct:   u.deadPoolMinYieldPct   ?? 1,    // fee yield below X% = dead pool
   },
 
   // ─── Strategy Mapping ───────────────────
   strategy: {
     strategy:     u.strategy     ?? "bid_ask",
-    binsBelow:    u.binsBelow    ?? u.maxBinsBelow ?? 69,  // legacy alias
-    minBinsBelow: u.minBinsBelow ?? 35,
-    maxBinsBelow: u.maxBinsBelow ?? u.binsBelow ?? 69,
-    defaultBinsBelow: u.defaultBinsBelow ?? null,
+    minBinsBelow: strategyMinBinsBelow,
+    maxBinsBelow: strategyMaxBinsBelow,
+    defaultBinsBelow: strategyDefaultBinsBelow,
   },
 
   // ─── Scheduling ─────────────────────────
   schedule: {
-    managementIntervalMin:  e.managementIntervalMin  ?? u.managementIntervalMin  ?? 10,
-    screeningIntervalMin:   e.screeningIntervalMin   ?? u.screeningIntervalMin   ?? 30,
+    managementIntervalMin:  u.managementIntervalMin  ?? 10,
+    screeningIntervalMin:   u.screeningIntervalMin   ?? 30,
     healthCheckIntervalMin: u.healthCheckIntervalMin ?? 60,
   },
 
@@ -178,9 +141,9 @@ export const config = {
     temperature: u.temperature ?? 0.373,
     maxTokens:   u.maxTokens   ?? 4096,
     maxSteps:    u.maxSteps    ?? 20,
-    managementModel: u.managementModel ?? process.env.LLM_MODEL ?? "nousresearch/hermes-3-llama-3.1-405b",
-    screeningModel:  u.screeningModel  ?? process.env.LLM_MODEL ?? "nousresearch/hermes-3-llama-3.1-405b",
-    generalModel:    u.generalModel    ?? process.env.LLM_MODEL ?? "nousresearch/hermes-3-llama-3.1-405b",
+    managementModel: u.managementModel ?? process.env.LLM_MODEL ?? "openrouter/healer-alpha",
+    screeningModel:  u.screeningModel  ?? process.env.LLM_MODEL ?? "openrouter/hunter-alpha",
+    generalModel:    u.generalModel    ?? process.env.LLM_MODEL ?? "openrouter/healer-alpha",
   },
 
   // ─── Darwinian Signal Weighting ───────
@@ -204,21 +167,20 @@ export const config = {
 
   // ─── HiveMind ─────────────────────────
   hiveMind: {
-    url: nonEmptyString(u.hiveMindUrl, process.env.HIVEMIND_URL, DEFAULT_HIVEMIND_URL),
+    url: nonEmptyString(u.hiveMindUrl, DEFAULT_HIVEMIND_URL),
     apiKey: nonEmptyString(u.hiveMindApiKey, process.env.HIVEMIND_API_KEY, DEFAULT_HIVEMIND_API_KEY),
     agentId: u.agentId ?? null,
     pullMode: u.hiveMindPullMode ?? "auto",
   },
 
-  // ─── Agent Meridian API ──────────────
   api: {
     url: nonEmptyString(u.agentMeridianApiUrl, process.env.AGENT_MERIDIAN_API_URL, DEFAULT_AGENT_MERIDIAN_API_URL),
     publicApiKey: nonEmptyString(u.publicApiKey, process.env.PUBLIC_API_KEY, DEFAULT_AGENT_MERIDIAN_PUBLIC_KEY),
     lpAgentRelayEnabled: u.lpAgentRelayEnabled ?? false,
   },
 
-  // ─── Jupiter ─────────────────────────
   jupiter: {
+    // Internal Jupiter Ultra settings; override by env only, do not expose in user-config.
     apiKey: process.env.JUPITER_API_KEY ?? "",
     referralAccount:
       process.env.JUPITER_REFERRAL_ACCOUNT ??
@@ -228,12 +190,10 @@ export const config = {
     ),
   },
 
-  // ─── Chart Indicators ────────────────
   indicators: {
     enabled: indicatorUserConfig.enabled ?? false,
     entryPreset: indicatorUserConfig.entryPreset ?? "supertrend_break",
-    // Use 'in' check so explicit `null` in user-config disables exit preset (vs falling back to default)
-    exitPreset: "exitPreset" in indicatorUserConfig ? indicatorUserConfig.exitPreset : "supertrend_break",
+    exitPreset: indicatorUserConfig.exitPreset ?? "supertrend_break",
     rsiLength: indicatorUserConfig.rsiLength ?? 2,
     intervals: Array.isArray(indicatorUserConfig.intervals)
       ? indicatorUserConfig.intervals
@@ -257,10 +217,6 @@ export const config = {
  *   3.0 SOL wallet → 0.98 SOL deploy
  *   4.0 SOL wallet → 1.33 SOL deploy
  */
-// Absolute minimum total bins below for any deploy — guards against 1-bin/tiny-range deploys.
-// Cannot be overridden by config. Use config.strategy.minBinsBelow to set the soft floor.
-export const MIN_SAFE_BINS_BELOW = 35;
-
 export function computeDeployAmount(walletSol) {
   const reserve  = config.management.gasReserve      ?? 0.2;
   const pct      = config.management.positionSizePct ?? 0.35;
@@ -278,12 +234,13 @@ export function computeDeployAmount(walletSol) {
  * agent cycle uses the evolved values without a restart.
  */
 export function reloadScreeningThresholds() {
-  if (!fs.existsSync(USER_CONFIG_PATH)) return;
   try {
+    if (!fs.existsSync(USER_CONFIG_PATH)) return;
     const fresh = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
     const s = config.screening;
     if (fresh.minFeeActiveTvlRatio != null) s.minFeeActiveTvlRatio = fresh.minFeeActiveTvlRatio;
-    if (fresh.maxVolatility  != null) s.maxVolatility  = fresh.maxVolatility;
+    if (fresh.minTokenFeesSol  != null) s.minTokenFeesSol  = fresh.minTokenFeesSol;
+    if (fresh.maxTop10Pct      != null) s.maxTop10Pct      = fresh.maxTop10Pct;
     if (fresh.useDiscordSignals !== undefined) s.useDiscordSignals = fresh.useDiscordSignals;
     if (fresh.discordSignalMode != null) s.discordSignalMode = fresh.discordSignalMode;
     if (fresh.excludeHighSupplyConcentration !== undefined) s.excludeHighSupplyConcentration = fresh.excludeHighSupplyConcentration;
@@ -308,5 +265,14 @@ export function reloadScreeningThresholds() {
     if (fresh.maxBotHoldersPct  != null) s.maxBotHoldersPct = fresh.maxBotHoldersPct;
     if (fresh.allowedLaunchpads !== undefined) s.allowedLaunchpads = fresh.allowedLaunchpads;
     if (fresh.blockedLaunchpads !== undefined) s.blockedLaunchpads = fresh.blockedLaunchpads;
+    const minBinsBelow = numericConfig(fresh.minBinsBelow) ?? config.strategy.minBinsBelow;
+    const maxBinsBelow = numericConfig(fresh.maxBinsBelow) ?? numericConfig(fresh.binsBelow) ?? config.strategy.maxBinsBelow;
+    const defaultBinsBelow = numericConfig(fresh.defaultBinsBelow) ?? numericConfig(fresh.binsBelow) ?? config.strategy.defaultBinsBelow ?? maxBinsBelow;
+    config.strategy.minBinsBelow = Math.max(MIN_SAFE_BINS_BELOW, Math.round(minBinsBelow));
+    config.strategy.maxBinsBelow = Math.max(config.strategy.minBinsBelow, Math.round(maxBinsBelow));
+    config.strategy.defaultBinsBelow = Math.max(
+      config.strategy.minBinsBelow,
+      Math.min(config.strategy.maxBinsBelow, Math.round(defaultBinsBelow)),
+    );
   } catch { /* ignore */ }
 }
