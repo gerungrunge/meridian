@@ -4,6 +4,7 @@ import { isDevBlocked, getBlockedDevs } from "../dev-blocklist.js";
 import { log } from "../logger.js";
 import { isBaseMintOnCooldown, isPoolOnCooldown } from "../pool-memory.js";
 import { confirmIndicatorPreset } from "./chart-indicators.js";
+import { getAgentMeridianBase, getAgentMeridianHeaders } from "./agent-meridian.js";
 
 const DATAPI_JUP = "https://datapi.jup.ag/v1";
 
@@ -26,9 +27,85 @@ function scoreCandidate(pool) {
   return feeTvl * 1000 + organic * 10 + volume / 100 + holders / 100;
 }
 
+function numeric(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function isUsableVolatility(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0;
+}
+
+function includesCaseInsensitive(values, value) {
+  if (!Array.isArray(values) || values.length === 0 || !value) return false;
+  const needle = String(value).toLowerCase();
+  return values.some((entry) => String(entry).toLowerCase() === needle);
+}
+
+function getRawPoolScreeningRejectReason(pool, s) {
+  const base = pool?.token_x || {};
+  const quote = pool?.token_y || {};
+  const binStep = numeric(pool?.dlmm_params?.bin_step);
+  const tvl = numeric(pool?.tvl ?? pool?.active_tvl);
+  const feeActiveTvlRatio = numeric(pool?.fee_active_tvl_ratio);
+  const volatility = numeric(pool?.volatility);
+  const volume = numeric(pool?.volume);
+  const holders = numeric(pool?.base_token_holders);
+  const mcap = numeric(base?.market_cap);
+  const baseOrganic = numeric(base?.organic_score);
+  const quoteOrganic = numeric(quote?.organic_score);
+  const launchpad = base?.launchpad || pool?.base_token_launchpad || null;
+  const createdAt = numeric(base?.created_at);
+
+  if (s.excludeHighSupplyConcentration && pool?.base_token_has_high_supply_concentration === true) {
+    return "base token has high supply concentration";
+  }
+  if (pool?.base_token_has_critical_warnings === true) return "base token has critical warnings";
+  if (pool?.quote_token_has_critical_warnings === true) return "quote token has critical warnings";
+  if (pool?.base_token_has_high_single_ownership === true) return "base token has high single ownership";
+  if (pool?.pool_type && pool.pool_type !== "dlmm") return `pool_type ${pool.pool_type} is not dlmm`;
+
+  if (mcap == null || mcap < s.minMcap) return `mcap ${mcap ?? "unknown"} below minMcap ${s.minMcap}`;
+  if (mcap > s.maxMcap) return `mcap ${mcap} above maxMcap ${s.maxMcap}`;
+  if (holders == null || holders < s.minHolders) return `holders ${holders ?? "unknown"} below minHolders ${s.minHolders}`;
+  if (volume == null || volume < s.minVolume) return `volume ${volume ?? "unknown"} below minVolume ${s.minVolume}`;
+  if (tvl == null || tvl < s.minTvl) return `TVL ${tvl ?? "unknown"} below minTvl ${s.minTvl}`;
+  if (s.maxTvl != null && tvl > s.maxTvl) return `TVL ${tvl} above maxTvl ${s.maxTvl}`;
+  if (binStep == null || binStep < s.minBinStep) return `bin_step ${binStep ?? "unknown"} below minBinStep ${s.minBinStep}`;
+  if (binStep > s.maxBinStep) return `bin_step ${binStep} above maxBinStep ${s.maxBinStep}`;
+  if (feeActiveTvlRatio == null || feeActiveTvlRatio < s.minFeeActiveTvlRatio) {
+    return `fee/active-TVL ${feeActiveTvlRatio ?? "unknown"} below minFeeActiveTvlRatio ${s.minFeeActiveTvlRatio}`;
+  }
+  if (!isUsableVolatility(volatility)) {
+    return `volatility ${volatility ?? "unknown"} is unusable`;
+  }
+  if (baseOrganic == null || baseOrganic < s.minOrganic) {
+    return `base organic ${baseOrganic ?? "unknown"} below minOrganic ${s.minOrganic}`;
+  }
+  if (quoteOrganic == null || quoteOrganic < s.minQuoteOrganic) {
+    return `quote organic ${quoteOrganic ?? "unknown"} below minQuoteOrganic ${s.minQuoteOrganic}`;
+  }
+  if (Array.isArray(s.allowedLaunchpads) && s.allowedLaunchpads.length > 0 && !includesCaseInsensitive(s.allowedLaunchpads, launchpad)) {
+    return `launchpad ${launchpad || "unknown"} not in allow-list`;
+  }
+  if (includesCaseInsensitive(s.blockedLaunchpads, launchpad)) {
+    return `blocked launchpad (${launchpad})`;
+  }
+  if (s.minTokenAgeHours != null) {
+    const maxCreatedAt = Date.now() - s.minTokenAgeHours * 3_600_000;
+    if (createdAt == null || createdAt > maxCreatedAt) return `token age below minTokenAgeHours ${s.minTokenAgeHours}`;
+  }
+  if (s.maxTokenAgeHours != null) {
+    const minCreatedAt = Date.now() - s.maxTokenAgeHours * 3_600_000;
+    if (createdAt == null || createdAt < minCreatedAt) return `token age above maxTokenAgeHours ${s.maxTokenAgeHours}`;
+  }
+  return null;
+}
+
 async function fetchDiscordSignalCandidates() {
-  const res = await fetch(`${config.api.url}/signals/discord/candidates`, {
-    headers: config.api.publicApiKey ? { "x-api-key": config.api.publicApiKey } : {},
+  const res = await fetch(`${getAgentMeridianBase()}/signals/discord/candidates`, {
+    headers: getAgentMeridianHeaders(),
   });
   if (!res.ok) throw new Error(`discord signal candidates ${res.status}`);
   const data = await res.json();
@@ -135,7 +212,7 @@ export async function discoverPools({
 
   const useServerDiscovery = !!config.api.publicApiKey;
   const url = useServerDiscovery
-    ? `${config.api.url}/discovery/pools?` +
+    ? `${getAgentMeridianBase()}/discovery/pools?` +
       `page_size=${page_size}` +
       `&filter_by=${encodeURIComponent(filters)}` +
       `&timeframe=${s.timeframe}` +
@@ -147,9 +224,7 @@ export async function discoverPools({
       `&category=${s.category}`;
 
   const res = await fetch(url, {
-    headers: useServerDiscovery && config.api.publicApiKey
-      ? { "x-api-key": config.api.publicApiKey }
-      : {},
+    headers: useServerDiscovery ? getAgentMeridianHeaders() : {},
   });
 
   if (!res.ok) {
@@ -186,7 +261,6 @@ export async function discoverPools({
       const byPool = new Map(rawPools.map((pool) => [pool.pool_address, pool]));
       for (const signalPool of signalPools) {
         if (byPool.has(signalPool.pool_address)) {
-          // Already in discovery results — just annotate with signal metadata
           byPool.set(signalPool.pool_address, {
             ...byPool.get(signalPool.pool_address),
             discord_signal: true,
@@ -196,19 +270,6 @@ export async function discoverPools({
             discord_signal_last_seen_at: signalPool.discord_signal_last_seen_at,
           });
         } else {
-          // Signal-only pool: validate against hard thresholds before merging
-          // (discovery API filters these server-side, but signal pools bypass that)
-          const tvl = Number(signalPool.active_tvl || signalPool.tvl || 0);
-          const vol = Number(signalPool.volume || 0);
-          const binStep = Number(signalPool.dlmm_params?.bin_step || signalPool.bin_step || 0);
-          if (tvl < s.minTvl || vol < s.minVolume) {
-            log("screening", `Discord signal skipped: ${signalPool.name || signalPool.pool_address?.slice(0, 8)} — TVL ${tvl} / vol ${vol} below thresholds`);
-            continue;
-          }
-          if (binStep > 0 && (binStep < s.minBinStep || binStep > s.maxBinStep)) {
-            log("screening", `Discord signal skipped: ${signalPool.name || signalPool.pool_address?.slice(0, 8)} — bin_step ${binStep} outside [${s.minBinStep}-${s.maxBinStep}]`);
-            continue;
-          }
           byPool.set(signalPool.pool_address, signalPool);
         }
       }
@@ -216,7 +277,16 @@ export async function discoverPools({
     }
   }
 
-  const condensed = rawPools.map(condensePool);
+  const filteredExamples = [];
+  const thresholdedRawPools = rawPools.filter((pool) => {
+    const reason = getRawPoolScreeningRejectReason(pool, s);
+    if (!reason) return true;
+    filteredExamples.push({ name: pool.name || pool.pool_address || "unknown pool", reason });
+    if (pool.discord_signal) log("screening", `Discord signal filtered: ${pool.name || pool.pool_address} — ${reason}`);
+    return false;
+  });
+
+  const condensed = thresholdedRawPools.map(condensePool);
 
   // Hard-filter blacklisted tokens and blocked deployers (what pool discovery already gave us)
   let pools = condensed.filter((p) => {
@@ -270,6 +340,7 @@ export async function discoverPools({
   return {
     total: data.total,
     pools,
+    filtered_examples: filteredExamples,
   };
 }
 
@@ -278,24 +349,38 @@ export async function discoverPools({
  * Hard filters applied in code, agent decides which to deploy into.
  */
 export async function getTopCandidates({ limit = 10 } = {}) {
-  const { pools } = await discoverPools({ page_size: 50 });
-  const filteredOut = [];
+  const { config } = await import("../config.js");
+  const discovery = await discoverPools({ page_size: 50 });
+  const { pools } = discovery;
+  const filteredOut = Array.isArray(discovery.filtered_examples) ? [...discovery.filtered_examples] : [];
 
   // Exclude pools where the wallet already has an open position
   const { getMyPositions } = await import("./dlmm.js");
   const { positions } = await getMyPositions();
   const occupiedPools = new Set(positions.map((p) => p.pool));
   const occupiedMints = new Set(positions.map((p) => p.base_mint).filter(Boolean));
+  const minTvl = Number(config.screening.minTvl ?? 0);
+  const maxTvl = config.screening.maxTvl == null ? null : Number(config.screening.maxTvl);
+  const minFeeActiveTvlRatio = Number(config.screening.minFeeActiveTvlRatio ?? 0);
 
-  const SOL_MINT = "So11111111111111111111111111111111111111112";
   const eligible = pools
     .filter((p) => {
-      // Hard filter: only SOL-quote pools. Wallet operates in SOL-only mode;
-      // non-SOL quote pools (e.g. DMC-USDC) will fail at chain level with "insufficient funds"
-      // for the missing quote token.
-      if (p.quote?.mint && p.quote.mint !== SOL_MINT) {
-        log("screening", `SOL-only: dropped ${p.name} — quote ${p.quote.symbol} (${p.quote.mint?.slice(0, 8)}) is not SOL`);
-        pushFilteredReason(filteredOut, p, `quote ${p.quote.symbol} not SOL (wallet is SOL-only)`);
+      const tvl = Number(p.tvl ?? p.active_tvl ?? 0);
+      if (Number.isFinite(minTvl) && minTvl > 0 && tvl < minTvl) {
+        pushFilteredReason(filteredOut, p, `TVL $${tvl} below minTvl $${minTvl}`);
+        return false;
+      }
+      if (Number.isFinite(maxTvl) && maxTvl > 0 && tvl > maxTvl) {
+        pushFilteredReason(filteredOut, p, `TVL $${tvl} above maxTvl $${maxTvl}`);
+        return false;
+      }
+      const feeActiveTvlRatio = Number(p.fee_active_tvl_ratio);
+      if (Number.isFinite(minFeeActiveTvlRatio) && minFeeActiveTvlRatio > 0 && (!Number.isFinite(feeActiveTvlRatio) || feeActiveTvlRatio < minFeeActiveTvlRatio)) {
+        pushFilteredReason(filteredOut, p, `fee/active-TVL ${Number.isFinite(feeActiveTvlRatio) ? feeActiveTvlRatio : "unknown"} below minFeeActiveTvlRatio ${minFeeActiveTvlRatio}`);
+        return false;
+      }
+      if (!isUsableVolatility(p.volatility)) {
+        pushFilteredReason(filteredOut, p, `volatility ${p.volatility ?? "unknown"} is unusable`);
         return false;
       }
       if (occupiedPools.has(p.pool)) {
@@ -315,30 +400,6 @@ export async function getTopCandidates({ limit = 10 } = {}) {
         log("screening", `Filtered cooldown token ${p.base?.symbol} (${p.base?.mint?.slice(0, 8)})`);
         pushFilteredReason(filteredOut, p, "token cooldown active");
         return false;
-      }
-      // Hard volatility floor — low-vol pools earn ~$0 fees unless bin_step compensates.
-      // Treat vol == 0 or null as "unknown/insufficient data" (typically fresh pools) and let through;
-      // only reject when API actually reports a measurable-but-low volatility.
-      const minVol = config.screening.minVolatility;
-      const volCompBinStep = config.screening.volatilityCompensateBinStep;
-      if (minVol != null && p.volatility != null && p.volatility > 0 && p.volatility < minVol) {
-        if (!(p.bin_step != null && p.bin_step >= volCompBinStep)) {
-          log("screening", `Volatility floor: dropped ${p.name} — vol ${p.volatility} < ${minVol} and bin_step ${p.bin_step} < ${volCompBinStep}`);
-          pushFilteredReason(filteredOut, p, `vol ${p.volatility} < ${minVol} (bin_step ${p.bin_step} < ${volCompBinStep})`);
-          return false;
-        }
-      }
-      // 5min volume / active_tvl ratio — alpha LP heuristic.
-      // Pools below this ratio earn fees too slowly to outpace IL on tight ranges.
-      // 5x ratio means pool churns 5× its active liquidity per timeframe window.
-      const minVolTvlRatio = config.screening.minVolumeActiveTvlRatio5m;
-      if (minVolTvlRatio != null && minVolTvlRatio > 0 && p.active_tvl > 0) {
-        const ratio = p.volume_window / p.active_tvl;
-        if (ratio < minVolTvlRatio) {
-          log("screening", `Vol/TVL ratio: dropped ${p.name} — ${ratio.toFixed(2)}x < ${minVolTvlRatio}x (vol ${p.volume_window} / active_tvl ${p.active_tvl})`);
-          pushFilteredReason(filteredOut, p, `vol/active_tvl ${ratio.toFixed(2)}x < ${minVolTvlRatio}x min`);
-          return false;
-        }
       }
       return true;
     })
@@ -497,7 +558,6 @@ export async function getTopCandidates({ limit = 10 } = {}) {
 
   return {
     candidates: eligible,
-    total_eligible: eligible.length,
     total_screened: pools.length,
     filtered_examples: filteredOut.slice(0, 3),
   };
@@ -511,16 +571,14 @@ export async function getTopCandidates({ limit = 10 } = {}) {
 export async function getPoolDetail({ pool_address, timeframe = "5m" }) {
   const useServerDiscovery = !!config.api.publicApiKey;
   const url = useServerDiscovery
-    ? `${config.api.url}/discovery/pools/${pool_address}?timeframe=${encodeURIComponent(timeframe)}`
+    ? `${getAgentMeridianBase()}/discovery/pools/${pool_address}?timeframe=${encodeURIComponent(timeframe)}`
     : `${POOL_DISCOVERY_BASE}/pools?` +
       `page_size=1` +
       `&filter_by=${encodeURIComponent(`pool_address=${pool_address}`)}` +
       `&timeframe=${timeframe}`;
 
   const res = await fetch(url, {
-    headers: useServerDiscovery && config.api.publicApiKey
-      ? { "x-api-key": config.api.publicApiKey }
-      : {},
+    headers: useServerDiscovery ? getAgentMeridianHeaders() : {},
   });
 
   if (!res.ok) {
@@ -560,15 +618,11 @@ function condensePool(p) {
     fee_pct: p.fee_pct,
 
     // Core metrics (the numbers that matter)
+    tvl: round(p.tvl),
     active_tvl: round(p.active_tvl),
     fee_window: round(p.fee),
     volume_window: round(p.volume),
-    // API sometimes returns 0 for fee_active_tvl_ratio on short timeframes — compute from raw values as fallback
-    fee_active_tvl_ratio: p.fee_active_tvl_ratio > 0
-      ? fix(p.fee_active_tvl_ratio, 4)
-      : (p.active_tvl > 0 ? fix((p.fee / p.active_tvl) * 100, 4) : 0),
-    // Alpha LP heuristic: volume churn vs active liquidity per 5min window. 5x+ = high-fee territory
-    vol_active_tvl_ratio: p.active_tvl > 0 ? fix((p.volume || 0) / p.active_tvl, 2) : 0,
+    fee_active_tvl_ratio: p.fee_active_tvl_ratio != null ? fix(p.fee_active_tvl_ratio, 4) : null,
     volatility: fix(p.volatility, 2),
 
 
@@ -610,7 +664,8 @@ function round(n) {
 }
 
 function fix(n, decimals) {
-  return n != null ? Number(n.toFixed(decimals)) : null;
+  const value = Number(n);
+  return Number.isFinite(value) ? Number(value.toFixed(decimals)) : null;
 }
 
 function pushFilteredReason(list, pool, reason) {
