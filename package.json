@@ -9,15 +9,22 @@
   },
   "scripts": {
     "setup": "node setup.js",
-    "start": "node --no-deprecation index.js",
-    "dev": "DRY_RUN=true node --no-deprecation index.js",
+    "env:encrypt": "node scripts/envrypt.js encrypt",
+    "start": "node index.js",
+    "dev": "DRY_RUN=true node index.js",
+    "test": "npm run test:syntax",
+    "test:syntax": "find . -path ./node_modules -prune -o -name '*.js' -exec node --check {} \\;",
     "test:screen": "node test/test-screening.js",
     "test:agent": "DRY_RUN=true node test/test-agent.js",
     "postinstall": "node scripts/patch-anchor.js"
   },
+  "knip": {
+    "ignore": [
+      "discord-listener/**"
+    ]
+  },
   "dependencies": {
     "@meteora-ag/dlmm": "1.9.4",
-    "@solana/spl-token": "^0.3.11",
     "@solana/web3.js": "^1.95.0",
     "bn.js": "^5.2.1",
     "bs58": "^5.0.0",
