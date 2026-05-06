@@ -9,18 +9,18 @@ import {
   closePosition,
   searchPools,
 } from "./dlmm.js";
-import { getWalletBalances, swapToken, sweepDust } from "./wallet.js";
+import { getWalletBalances, swapToken } from "./wallet.js";
 import { studyTopLPers } from "./study.js";
 import { addLesson, clearAllLessons, clearPerformance, removeLessonsByKeyword, getPerformanceHistory, pinLesson, unpinLesson, listLessons } from "../lessons.js";
 import { setPositionInstruction } from "../state.js";
 
-import { getPoolMemory, addPoolNote, countRecentDeploys } from "../pool-memory.js";
+import { getPoolMemory, addPoolNote } from "../pool-memory.js";
 import { addStrategy, listStrategies, getStrategy, setActiveStrategy, removeStrategy } from "../strategy-library.js";
 import { addToBlacklist, removeFromBlacklist, listBlacklist } from "../token-blacklist.js";
 import { blockDev, unblockDev, listBlockedDevs } from "../dev-blocklist.js";
 import { addSmartWallet, removeSmartWallet, listSmartWallets, checkSmartWalletsOnPool } from "../smart-wallets.js";
 import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
-import { config, reloadScreeningThresholds } from "../config.js";
+import { config, reloadScreeningThresholds, MIN_SAFE_BINS_BELOW } from "../config.js";
 import { getRecentDecisions } from "../decision-log.js";
 import fs from "fs";
 import path from "path";
@@ -29,12 +29,179 @@ import { execSync, spawn } from "child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "../user-config.json");
+const POOL_DISCOVERY_BASE = "https://pool-discovery-api.datapi.meteora.ag";
 import { log, logAction } from "../logger.js";
 import { notifyDeploy, notifyClose, notifySwap } from "../telegram.js";
+
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function poolDetailTvl(pool) {
+  return numberOrNull(pool?.tvl ?? pool?.active_tvl ?? pool?.liquidity);
+}
+
+function poolDetailBinStep(pool) {
+  return numberOrNull(pool?.dlmm_params?.bin_step ?? pool?.pool_config?.bin_step);
+}
+
+function poolDetailFeeActiveTvlRatio(pool) {
+  return numberOrNull(pool?.fee_active_tvl_ratio);
+}
+
+function poolDetailVolatility(pool) {
+  return numberOrNull(pool?.volatility);
+}
+
+async function fetchFreshPoolDetail(poolAddress) {
+  const timeframe = encodeURIComponent(config.screening.timeframe || "5m");
+  const filter = encodeURIComponent(`pool_address=${poolAddress}`);
+  const url = `${POOL_DISCOVERY_BASE}/pools?page_size=1&filter_by=${filter}&timeframe=${timeframe}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Pool Discovery API error: ${res.status} ${res.statusText}`);
+  const data = await res.json();
+  return (data?.data || [])[0] ?? null;
+}
+
+async function validateDeployPoolThresholds(args) {
+  let detail;
+  try {
+    detail = await fetchFreshPoolDetail(args.pool_address);
+    if (!detail) throw new Error(`Pool ${args.pool_address} not found`);
+  } catch (error) {
+    return {
+      pass: false,
+      reason: `Could not verify pool screening thresholds before deploy: ${error.message}`,
+    };
+  }
+
+  const tvl = poolDetailTvl(detail);
+  const minTvl = numberOrNull(config.screening.minTvl);
+  const maxTvl = numberOrNull(config.screening.maxTvl);
+  if (tvl == null) {
+    return {
+      pass: false,
+      reason: "Could not verify pool TVL before deploy.",
+    };
+  }
+  if (minTvl != null && minTvl > 0 && tvl < minTvl) {
+    return {
+      pass: false,
+      reason: `Pool TVL $${tvl} is below configured minTvl $${minTvl}.`,
+    };
+  }
+  if (maxTvl != null && maxTvl > 0 && tvl > maxTvl) {
+    return {
+      pass: false,
+      reason: `Pool TVL $${tvl} is above configured maxTvl $${maxTvl}.`,
+    };
+  }
+
+  const feeActiveTvlRatio = poolDetailFeeActiveTvlRatio(detail);
+  const minFeeActiveTvlRatio = numberOrNull(config.screening.minFeeActiveTvlRatio);
+  if (
+    minFeeActiveTvlRatio != null &&
+    minFeeActiveTvlRatio > 0 &&
+    (feeActiveTvlRatio == null || feeActiveTvlRatio < minFeeActiveTvlRatio)
+  ) {
+    return {
+      pass: false,
+      reason: `Pool fee/active-TVL ${feeActiveTvlRatio ?? "unknown"}% is below configured minFeeActiveTvlRatio ${minFeeActiveTvlRatio}%.`,
+    };
+  }
+
+  const volatility = poolDetailVolatility(detail);
+  if (volatility == null || volatility <= 0) {
+    return {
+      pass: false,
+      reason: `Pool volatility ${volatility ?? "unknown"} is unusable. Refusing deploy.`,
+    };
+  }
+
+  const actualBinStep = poolDetailBinStep(detail);
+  const minStep = numberOrNull(config.screening.minBinStep);
+  const maxStep = numberOrNull(config.screening.maxBinStep);
+  if (actualBinStep != null && minStep != null && actualBinStep < minStep) {
+    return {
+      pass: false,
+      reason: `Pool bin_step ${actualBinStep} is below configured minBinStep ${minStep}.`,
+    };
+  }
+  if (actualBinStep != null && maxStep != null && actualBinStep > maxStep) {
+    return {
+      pass: false,
+      reason: `Pool bin_step ${actualBinStep} is above configured maxBinStep ${maxStep}.`,
+    };
+  }
+
+  return { pass: true };
+}
 
 // Registered by index.js so update_config can restart cron jobs when intervals change
 let _cronRestarter = null;
 export function registerCronRestarter(fn) { _cronRestarter = fn; }
+
+function coerceBoolean(value, key) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  throw new Error(`${key} must be true or false`);
+}
+
+function coerceFiniteNumber(value, key) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) throw new Error(`${key} must be a finite number`);
+  return n;
+}
+
+function coerceString(value, key) {
+  if (typeof value !== "string") throw new Error(`${key} must be a string`);
+  return value.trim();
+}
+
+function coerceStringArray(value, key) {
+  if (!Array.isArray(value)) throw new Error(`${key} must be an array of strings`);
+  return value.map((entry) => coerceString(entry, key)).filter(Boolean);
+}
+
+function normalizeConfigValue(key, value) {
+  const booleanKeys = new Set([
+    "excludeHighSupplyConcentration",
+    "useDiscordSignals",
+    "avoidPvpSymbols",
+    "blockPvpSymbols",
+    "autoSwapAfterClaim",
+    "trailingTakeProfit",
+    "solMode",
+    "darwinEnabled",
+    "lpAgentRelayEnabled",
+  ]);
+  const arrayKeys = new Set(["allowedLaunchpads", "blockedLaunchpads"]);
+  const stringKeys = new Set([
+    "timeframe",
+    "category",
+    "discordSignalMode",
+    "strategy",
+    "managementModel",
+    "screeningModel",
+    "generalModel",
+    "hiveMindUrl",
+    "hiveMindApiKey",
+    "agentId",
+    "hiveMindPullMode",
+    "publicApiKey",
+    "agentMeridianApiUrl",
+  ]);
+  if (value === null) return null;
+  if (booleanKeys.has(key)) return coerceBoolean(value, key);
+  if (arrayKeys.has(key)) return coerceStringArray(value, key);
+  if (stringKeys.has(key)) return coerceString(value, key);
+  return coerceFiniteNumber(value, key);
+}
 
 // Map tool names to implementations
 const toolMap = {
@@ -58,21 +225,6 @@ const toolMap = {
   close_position: closePosition,
   get_wallet_balance: getWalletBalances,
   swap_token: swapToken,
-  sweep_dust: async ({ min_usd, slippage_bps } = {}) => {
-    // Auto-collect active position base mints so we never sweep an open LP token
-    let skipMints = [];
-    try {
-      const positions = await getMyPositions({ force: true });
-      skipMints = (positions.positions || []).map((p) => p.base_mint).filter(Boolean);
-    } catch (e) {
-      log("dust_sweep_warn", `Could not fetch active positions: ${e.message}`);
-    }
-    return sweepDust({
-      min_usd: min_usd ?? config.management.dustSweepMinUsd,
-      slippage_bps: slippage_bps ?? config.management.dustSweepSlippageBps,
-      skip_mints: skipMints,
-    });
-  },
   get_top_lpers: studyTopLPers,
   study_top_lpers: studyTopLPers,
   set_position_note: ({ position_address, instruction }) => {
@@ -173,20 +325,19 @@ const toolMap = {
       minTokenAgeHours: ["screening", "minTokenAgeHours"],
       maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
       athFilterPct:     ["screening", "athFilterPct"],
-      maxVolatility:    ["screening", "maxVolatility"],
-      minVolatility:    ["screening", "minVolatility"],
-      volatilityCompensateBinStep: ["screening", "volatilityCompensateBinStep"],
-      minVolumeActiveTvlRatio5m: ["screening", "minVolumeActiveTvlRatio5m"],
       minFeePerTvl24h: ["management", "minFeePerTvl24h"],
       // management
       minClaimAmount: ["management", "minClaimAmount"],
       autoSwapAfterClaim: ["management", "autoSwapAfterClaim"],
       outOfRangeBinsToClose: ["management", "outOfRangeBinsToClose"],
       outOfRangeWaitMinutes: ["management", "outOfRangeWaitMinutes"],
-      minAgeBeforeOOR: ["management", "minAgeBeforeOOR"],
-      minAgeBeforeDecayClose: ["management", "minAgeBeforeDecayClose"],
       oorCooldownTriggerCount: ["management", "oorCooldownTriggerCount"],
       oorCooldownHours: ["management", "oorCooldownHours"],
+      repeatDeployCooldownEnabled: ["management", "repeatDeployCooldownEnabled"],
+      repeatDeployCooldownTriggerCount: ["management", "repeatDeployCooldownTriggerCount"],
+      repeatDeployCooldownHours: ["management", "repeatDeployCooldownHours"],
+      repeatDeployCooldownScope: ["management", "repeatDeployCooldownScope"],
+      repeatDeployCooldownMinFeeEarnedPct: ["management", "repeatDeployCooldownMinFeeEarnedPct"],
       minVolumeToRebalance: ["management", "minVolumeToRebalance"],
       stopLossPct: ["management", "stopLossPct"],
       takeProfitPct: ["management", "takeProfitPct"],
@@ -216,10 +367,10 @@ const toolMap = {
       maxTokens: ["llm", "maxTokens"],
       maxSteps: ["llm", "maxSteps"],
       // strategy
-      strategy:         ["strategy", "strategy"],
-      binsBelow:        ["strategy", "binsBelow"],
-      minBinsBelow:     ["strategy", "minBinsBelow"],
-      maxBinsBelow:     ["strategy", "maxBinsBelow"],
+      strategy: ["strategy", "strategy"],
+      binsBelow: ["strategy", "maxBinsBelow", ["maxBinsBelow"]],
+      minBinsBelow: ["strategy", "minBinsBelow"],
+      maxBinsBelow: ["strategy", "maxBinsBelow"],
       defaultBinsBelow: ["strategy", "defaultBinsBelow"],
       // hivemind
       hiveMindUrl: ["hiveMind", "url"],
@@ -230,6 +381,16 @@ const toolMap = {
       publicApiKey: ["api", "publicApiKey"],
       agentMeridianApiUrl: ["api", "url"],
       lpAgentRelayEnabled: ["api", "lpAgentRelayEnabled"],
+      // chart indicators
+      chartIndicatorsEnabled: ["indicators", "enabled", ["chartIndicators", "enabled"]],
+      indicatorEntryPreset: ["indicators", "entryPreset", ["chartIndicators", "entryPreset"]],
+      indicatorExitPreset: ["indicators", "exitPreset", ["chartIndicators", "exitPreset"]],
+      rsiLength: ["indicators", "rsiLength", ["chartIndicators", "rsiLength"]],
+      indicatorIntervals: ["indicators", "intervals", ["chartIndicators", "intervals"]],
+      indicatorCandles: ["indicators", "candles", ["chartIndicators", "candles"]],
+      rsiOversold: ["indicators", "rsiOversold", ["chartIndicators", "rsiOversold"]],
+      rsiOverbought: ["indicators", "rsiOverbought", ["chartIndicators", "rsiOverbought"]],
+      requireAllIntervals: ["indicators", "requireAllIntervals", ["chartIndicators", "requireAllIntervals"]],
     };
 
     const applied = {};
@@ -240,10 +401,29 @@ const toolMap = {
       Object.entries(CONFIG_MAP).map(([k, v]) => [k.toLowerCase(), [k, v]])
     );
 
+    if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+      return { success: false, error: "changes must be an object", reason };
+    }
+
+    const STRATEGY_BIN_KEYS = new Set(["binsBelow", "minBinsBelow", "maxBinsBelow", "defaultBinsBelow"]);
     for (const [key, val] of Object.entries(changes)) {
       const match = CONFIG_MAP[key] ? [key, CONFIG_MAP[key]] : CONFIG_MAP_LOWER[key.toLowerCase()];
       if (!match) { unknown.push(key); continue; }
-      applied[match[0]] = val;
+      try {
+        let normalizedVal = val;
+        if (STRATEGY_BIN_KEYS.has(match[0])) {
+          const numericVal = Number(val);
+          if (!Number.isFinite(numericVal)) {
+            throw new Error(`${match[0]} must be a finite number`);
+          }
+          normalizedVal = Math.max(MIN_SAFE_BINS_BELOW, Math.round(numericVal));
+        } else {
+          normalizedVal = normalizeConfigValue(match[0], val);
+        }
+        applied[match[0]] = normalizedVal;
+      } catch (error) {
+        return { success: false, error: error.message, key: match[0], reason };
+      }
     }
 
     if (Object.keys(applied).length === 0) {
@@ -251,43 +431,54 @@ const toolMap = {
       return { success: false, unknown, reason };
     }
 
-    // Environment variable locks — keys locked by env vars cannot be
-    // overridden by bot self-tune. The file is still updated for record,
-    // but the live config value stays as the env var dictates.
-    const ENV_LOCKS = {
-      deployAmountSol:       "DEPLOY_AMOUNT_SOL",
-      maxPositions:          "MAX_POSITIONS",
-      minSolToOpen:          "MIN_SOL_TO_OPEN",
-      maxDeployAmount:       "MAX_DEPLOY_AMOUNT",
-      gasReserve:            "GAS_RESERVE",
-      positionSizePct:       "POSITION_SIZE_PCT",
-      stopLossPct:           "STOP_LOSS_PCT",
-      takeProfitPct:         "TAKE_PROFIT_PCT",
-      managementIntervalMin: "MANAGEMENT_INTERVAL_MIN",
-      screeningIntervalMin:  "SCREENING_INTERVAL_MIN",
-    };
-
-    // Apply to live config immediately (skip env-locked keys)
-    const envLocked = [];
-    for (const [key, val] of Object.entries(applied)) {
-      const envVar = ENV_LOCKS[key];
-      if (envVar && process.env[envVar] != null && process.env[envVar] !== "") {
-        envLocked.push(key);
-        log("config", `update_config: ${key} is locked by env var ${envVar} — skipping live update (file still updated)`);
-        continue;
+    let userConfig = {};
+    if (fs.existsSync(USER_CONFIG_PATH)) {
+      try {
+        userConfig = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
+      } catch (error) {
+        return { success: false, error: `Invalid user-config.json: ${error.message}`, reason };
       }
+    }
+
+    // Apply to live config immediately after the persisted config is known-good.
+    for (const [key, val] of Object.entries(applied)) {
       const [section, field] = CONFIG_MAP[key];
       const before = config[section][field];
       config[section][field] = val;
       log("config", `update_config: config.${section}.${field} ${before} → ${val} (verify: ${config[section][field]})`);
     }
-
-    // Persist to user-config.json
-    let userConfig = {};
-    if (fs.existsSync(USER_CONFIG_PATH)) {
-      try { userConfig = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /**/ }
+    if (
+      applied.binsBelow != null ||
+      applied.minBinsBelow != null ||
+      applied.maxBinsBelow != null ||
+      applied.defaultBinsBelow != null
+    ) {
+      config.strategy.minBinsBelow = Math.max(MIN_SAFE_BINS_BELOW, Math.round(Number(config.strategy.minBinsBelow ?? MIN_SAFE_BINS_BELOW)));
+      config.strategy.maxBinsBelow = Math.max(config.strategy.minBinsBelow, Math.round(Number(config.strategy.maxBinsBelow ?? config.strategy.minBinsBelow)));
+      config.strategy.defaultBinsBelow = Math.max(
+        config.strategy.minBinsBelow,
+        Math.min(
+          config.strategy.maxBinsBelow,
+          Math.round(Number(config.strategy.defaultBinsBelow ?? config.strategy.maxBinsBelow)),
+        ),
+      );
     }
-    Object.assign(userConfig, applied);
+
+    for (const [key, val] of Object.entries(applied)) {
+      const persistPath = CONFIG_MAP[key]?.[2];
+      if (Array.isArray(persistPath) && persistPath.length > 0) {
+        let target = userConfig;
+        for (const part of persistPath.slice(0, -1)) {
+          if (!target[part] || typeof target[part] !== "object" || Array.isArray(target[part])) {
+            target[part] = {};
+          }
+          target = target[part];
+        }
+        target[persistPath[persistPath.length - 1]] = val;
+      } else {
+        userConfig[key] = val;
+      }
+    }
     userConfig._lastAgentTune = new Date().toISOString();
     fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
 
@@ -298,9 +489,7 @@ const toolMap = {
       log("config", `Cron restarted — management: ${config.schedule.managementIntervalMin}m, screening: ${config.schedule.screeningIntervalMin}m`);
     }
 
-    // Save as a lesson — but skip ephemeral per-deploy interval changes
-    // (managementIntervalMin / screeningIntervalMin change every deploy based on volatility;
-    //  the rule is already in the system prompt, storing it 75+ times is pure noise)
+    // Skip repeated volatility-driven interval changes; they are operational tuning, not reusable lessons.
     const lessonsKeys = Object.keys(applied).filter(
       k => k !== "managementIntervalMin" && k !== "screeningIntervalMin"
     );
@@ -309,8 +498,8 @@ const toolMap = {
       addLesson(`[SELF-TUNED] Changed ${summary} — ${reason}`, ["self_tune", "config_change"]);
     }
 
-    log("config", `Agent self-tuned: ${JSON.stringify(applied)}${envLocked.length ? ` (env-locked: ${envLocked.join(", ")})` : ""} — ${reason}`);
-    return { success: true, applied, unknown, envLocked, reason };
+    log("config", `Agent self-tuned: ${JSON.stringify(applied)} — ${reason}`);
+    return { success: true, applied, unknown, reason };
   },
 };
 
@@ -320,7 +509,6 @@ const WRITE_TOOLS = new Set([
   "claim_fees",
   "close_position",
   "swap_token",
-  "sweep_dust",
 ]);
 const PROTECTED_TOOLS = new Set([
   ...WRITE_TOOLS,
@@ -389,12 +577,7 @@ export async function executeTool(name, args) {
             const token = balances.tokens?.find(t => t.mint === result.base_mint);
             if (token && token.usd >= 0.10) {
               log("executor", `Auto-swapping ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd.toFixed(2)}) back to SOL`);
-              const swapResult = await swapToken({
-                input_mint: result.base_mint,
-                output_mint: "SOL",
-                amount: token.balance,
-                slippage_bps: config.management.dustSweepSlippageBps,
-              });
+              const swapResult = await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
               // Tell the model the swap already happened so it doesn't call swap_token again
               result.auto_swapped = true;
               result.auto_swap_note = `Base token already auto-swapped back to SOL (${token.symbol || result.base_mint.slice(0, 8)} → SOL). Do NOT call swap_token again.`;
@@ -404,53 +587,16 @@ export async function executeTool(name, args) {
             log("executor_warn", `Auto-swap after close failed: ${e.message}`);
           }
         }
-        // Sweep ALL remaining SPL dust to SOL (catches old leftovers + tokens below the $0.10 single-swap threshold)
-        if (!args.skip_swap && config.management.dustSweepEnabled) {
-          try {
-            const positions = await getMyPositions({ force: true });
-            const activeMints = (positions.positions || []).map(p => p.base_mint).filter(Boolean);
-            const sweep = await sweepDust({
-              min_usd: config.management.dustSweepMinUsd,
-              slippage_bps: config.management.dustSweepSlippageBps,
-              skip_mints: activeMints,
-            });
-            if (sweep.swept?.length) {
-              result.dust_swept = sweep.swept.length;
-              result.dust_swept_usd = sweep.total_swept_usd;
-            }
-          } catch (e) {
-            log("executor_warn", `Dust sweep after close failed: ${e.message}`);
-          }
-        }
       } else if (name === "claim_fees" && config.management.autoSwapAfterClaim && result.base_mint) {
         try {
           const balances = await getWalletBalances({});
           const token = balances.tokens?.find(t => t.mint === result.base_mint);
           if (token && token.usd >= 0.10) {
             log("executor", `Auto-swapping claimed ${token.symbol || result.base_mint.slice(0, 8)} ($${token.usd.toFixed(2)}) back to SOL`);
-            await swapToken({
-              input_mint: result.base_mint,
-              output_mint: "SOL",
-              amount: token.balance,
-              slippage_bps: config.management.dustSweepSlippageBps,
-            });
+            await swapToken({ input_mint: result.base_mint, output_mint: "SOL", amount: token.balance });
           }
         } catch (e) {
           log("executor_warn", `Auto-swap after claim failed: ${e.message}`);
-        }
-        // Sweep dust after claim too — only skip mints that are still in active positions
-        if (config.management.dustSweepEnabled) {
-          try {
-            const positions = await getMyPositions({ force: true });
-            const activeMints = (positions.positions || []).map(p => p.base_mint).filter(Boolean);
-            await sweepDust({
-              min_usd: config.management.dustSweepMinUsd,
-              slippage_bps: config.management.dustSweepSlippageBps,
-              skip_mints: activeMints,
-            });
-          } catch (e) {
-            log("executor_warn", `Dust sweep after claim failed: ${e.message}`);
-          }
         }
       }
     }
@@ -481,6 +627,9 @@ export async function executeTool(name, args) {
 async function runSafetyChecks(name, args) {
   switch (name) {
     case "deploy_position": {
+      const poolThresholds = await validateDeployPoolThresholds(args);
+      if (!poolThresholds.pass) return poolThresholds;
+
       // Reject pools with bin_step out of configured range
       const minStep = config.screening.minBinStep;
       const maxStep = config.screening.maxBinStep;
@@ -488,6 +637,65 @@ async function runSafetyChecks(name, args) {
         return {
           pass: false,
           reason: `bin_step ${args.bin_step} is outside the allowed range of [${minStep}-${maxStep}].`,
+        };
+      }
+
+      const deployAmountY = Number(args.amount_y ?? args.amount_sol ?? 0);
+      const deployAmountX = Number(args.amount_x ?? 0);
+      if (Number.isFinite(deployAmountX) && deployAmountX > 0) {
+        return {
+          pass: false,
+          reason: "This agent only supports single-side SOL deploys. Use amount_y/amount_sol and keep amount_x=0.",
+        };
+      }
+      const requestedBinsBelow = Number(args.bins_below ?? config.strategy.defaultBinsBelow ?? config.strategy.minBinsBelow);
+      const requestedBinsAbove = Number(args.bins_above ?? 0);
+      const minBinsBelow = Math.max(MIN_SAFE_BINS_BELOW, Number(config.strategy.minBinsBelow ?? MIN_SAFE_BINS_BELOW));
+      const isSingleSidedSol = deployAmountY > 0 && deployAmountX <= 0;
+      const requestedTotalBins = requestedBinsBelow + requestedBinsAbove;
+      const requestedVolatility = args.volatility == null ? null : Number(args.volatility);
+      if (args.volatility != null && (!Number.isFinite(requestedVolatility) || requestedVolatility <= 0)) {
+        return {
+          pass: false,
+          reason: `volatility ${args.volatility} is invalid. Refusing deploy because the volatility feed is unusable.`,
+        };
+      }
+      if (
+        args.downside_pct == null &&
+        args.upside_pct == null &&
+        (
+          !Number.isFinite(requestedBinsBelow) ||
+          !Number.isFinite(requestedBinsAbove) ||
+          !Number.isInteger(requestedBinsBelow) ||
+          !Number.isInteger(requestedBinsAbove) ||
+          requestedBinsBelow < 0 ||
+          requestedBinsAbove < 0 ||
+          requestedTotalBins < minBinsBelow
+        )
+      ) {
+        return {
+          pass: false,
+          reason: `deploy range ${requestedTotalBins} total bins is below minimum ${minBinsBelow}. Refusing 1-bin/tiny-range deploy.`,
+        };
+      }
+      if (
+        isSingleSidedSol &&
+        args.downside_pct == null &&
+        (!Number.isFinite(requestedBinsBelow) || !Number.isInteger(requestedBinsBelow) || requestedBinsBelow < minBinsBelow)
+      ) {
+        return {
+          pass: false,
+          reason: `bins_below ${args.bins_below ?? "missing"} is below minimum ${minBinsBelow}. Refusing 1-bin/tiny-range deploy.`,
+        };
+      }
+      if (
+        isSingleSidedSol &&
+        args.upside_pct == null &&
+        (!Number.isFinite(requestedBinsAbove) || !Number.isInteger(requestedBinsAbove) || requestedBinsAbove !== 0)
+      ) {
+        return {
+          pass: false,
+          reason: "Single-side SOL deploy must use bins_above=0.",
         };
       }
 
@@ -522,22 +730,9 @@ async function runSafetyChecks(name, args) {
         }
       }
 
-      // Cap repeated deploys on the same pool within a 24h window — blocks trend-chasing
-      // (e.g. HIGHER-SOL: 4 deploys in 6 days, each at progressively higher bins, ended -1.46% net)
-      const deployCap = config.risk.maxDeploysPerPool24h;
-      if (deployCap != null && deployCap > 0 && args.pool_address) {
-        const recentCount = countRecentDeploys(args.pool_address, 24);
-        if (recentCount >= deployCap) {
-          return {
-            pass: false,
-            reason: `Pool ${args.pool_address} already had ${recentCount} closed deploy(s) in the last 24h (cap: ${deployCap}). Wait or pick a different pool.`,
-          };
-        }
-      }
-
       // Check amount limits
-      const amountY = args.amount_y ?? args.amount_sol ?? 0;
-      if (amountY <= 0) {
+      const amountY = deployAmountY;
+      if (!Number.isFinite(amountY) || amountY <= 0) {
         return {
           pass: false,
           reason: `Must provide a positive SOL amount (amount_y).`,
@@ -558,32 +753,17 @@ async function runSafetyChecks(name, args) {
         };
       }
 
-      // Check SOL balance — auto-cap if LLM overshoots
+      // Check SOL balance
       if (process.env.DRY_RUN !== "true") {
         const balance = await getWalletBalances();
         const gasReserve = config.management.gasReserve;
-        const maxAffordable = parseFloat((balance.sol - gasReserve).toFixed(4));
-        if (amountY > maxAffordable) {
-          if (maxAffordable >= 0.1) {
-            // Auto-reduce to max affordable instead of blocking
-            const capped = parseFloat(Math.min(maxAffordable, config.risk.maxDeployAmount).toFixed(4));
-            log("safety_block", `deploy_position: LLM requested ${amountY} SOL but wallet can only afford ${capped} SOL (${balance.sol} - ${gasReserve} reserve). Auto-capping.`);
-            if (args.amount_y != null) args.amount_y = capped;
-            if (args.amount_sol != null) args.amount_sol = capped;
-          } else {
-            return {
-              pass: false,
-              reason: `Insufficient SOL: have ${balance.sol} SOL, need ${amountY + gasReserve} SOL (${amountY} deploy + ${gasReserve} gas reserve). Max affordable: ${maxAffordable} SOL.`,
-            };
-          }
+        const minRequired = amountY + gasReserve;
+        if (balance.sol < minRequired) {
+          return {
+            pass: false,
+            reason: `Insufficient SOL: have ${balance.sol} SOL, need ${minRequired} SOL (${amountY} deploy + ${gasReserve} gas reserve).`,
+          };
         }
-      }
-
-      // Hard-enforce configured strategy — LLM cannot override
-      const configuredStrategy = config.strategy?.strategy || "bid_ask";
-      if (args.strategy && args.strategy !== configuredStrategy) {
-        log("safety_block", `deploy_position: LLM chose "${args.strategy}" but config enforces "${configuredStrategy}". Auto-correcting.`);
-        args.strategy = configuredStrategy;
       }
 
       return { pass: true };
