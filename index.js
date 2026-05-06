@@ -1,22 +1,29 @@
-import "dotenv/config";
-
-const originalEmitWarning = process.emitWarning;
-process.emitWarning = function(warning, type, code, ...args) {
-  if (code === "DEP0040" || (warning && typeof warning === 'string' && warning.includes("punycode"))) return;
-  return originalEmitWarning.call(process, warning, type, code, ...args);
-};
-
+import "./envcrypt.js";
 import cron from "node-cron";
 import readline from "readline";
+import path from "path";
+import { fileURLToPath } from "url";
 import { agentLoop } from "./agent.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
-import { getWalletBalances, swapToken } from "./tools/wallet.js";
+import { getWalletBalances } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
-import { evolveThresholds, getPerformanceSummary, getPerformanceHistory, listLessons, getPoolLeaderboard, getRiskSnapshot } from "./lessons.js";
+import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
-import { startPolling, stopPolling, sendMessage, sendHTML, notifyOutOfRange, isEnabled as telegramEnabled, createLiveMessage } from "./telegram.js";
+import {
+  startPolling,
+  stopPolling,
+  sendMessage,
+  sendMessageWithButtons,
+  sendHTML,
+  editMessage,
+  editMessageWithButtons,
+  answerCallbackQuery,
+  notifyOutOfRange,
+  isEnabled as telegramEnabled,
+  createLiveMessage,
+} from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
 import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
@@ -25,22 +32,21 @@ import { checkSmartWalletsOnPool } from "./smart-wallets.js";
 import { getTokenNarrative, getTokenInfo } from "./tools/token.js";
 import { stageSignals } from "./signal-tracker.js";
 import { getWeightsSummary } from "./signal-weights.js";
-import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync, getHiveMindStatus } from "./hivemind.js";
+import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync } from "./hivemind.js";
 import { appendDecision } from "./decision-log.js";
-import { getIndicatorSummary, checkEntryConfirmation, checkExitConfirmation } from "./chart-indicators.js";
 
-log("startup", "DLMM LP Agent starting...");
-log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
-log("startup", `Model: ${process.env.LLM_MODEL || "nousresearch/hermes-3-llama-3.1-405b"}`);
-ensureAgentId();
-const _hiveStatus = getHiveMindStatus();
-log("startup", `Hive Mind: ${_hiveStatus.enabled ? `ENABLED (${_hiveStatus.url})` : "DISABLED"}`);
-bootstrapHiveMind()
-  .then((result) => {
-    if (result?.enabled) log("hivemind", `Bootstrap OK — agentId=${result.agentId} pullMode=${result.pullMode}`);
-  })
-  .catch((error) => log("hivemind_warn", `Bootstrap failed: ${error.message}`));
-startHiveMindBackgroundSync();
+const isMain = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
+
+if (isMain) {
+  log("startup", "DLMM LP Agent starting...");
+  log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
+  log("startup", `Model: ${process.env.LLM_MODEL || "hermes-3-405b"}`);
+  ensureAgentId();
+  bootstrapHiveMind().catch((error) => log("hivemind_warn", `Bootstrap failed: ${error.message}`));
+  startHiveMindBackgroundSync();
+}
 
 const TP_PCT = config.management.takeProfitPct;
 const DEPLOY = config.management.deployAmountSol;
@@ -207,53 +213,6 @@ export async function runManagementCycle({ silent = false } = {}) {
     positions = livePositions?.positions || [];
 
     if (positions.length === 0) {
-      // ── Stale token cleanup ─────────────────────────────────────
-      // When relay close fails or position is auto-closed by state sync,
-      // non-SOL tokens can be left stranded. Swap them back to SOL.
-      try {
-        const balances = await getWalletBalances();
-        const SOL_MINT = config.tokens.SOL;
-        const USDC_MINT = config.tokens.USDC;
-        const USDT_MINT = config.tokens.USDT;
-        // Skip SOL, USDC, USDT, and anything that normalizes to the wrapped SOL mint
-        const { normalizeMint } = await import("./tools/wallet.js");
-        const staleTokens = (balances.tokens || []).filter(t => {
-          if (!t.mint || t.balance <= 0 || (t.usd != null && t.usd < 0.10)) return false;
-          // Skip SOL by every possible check: direct mint match, normalized, and symbol
-          if (t.mint === SOL_MINT) return false;
-          const norm = normalizeMint(t.mint);
-          if (norm === SOL_MINT) return false;
-          if (t.mint === USDC_MINT || t.mint === USDT_MINT) return false;
-          const sym = (t.symbol || "").toUpperCase();
-          if (sym === "SOL" || sym === "WSOL" || sym === "USDC" || sym === "USDT") return false;
-          return true;
-        });
-        if (staleTokens.length > 0) {
-          log("cron", `Found ${staleTokens.length} stale token(s) in wallet — auto-swapping to SOL`);
-          for (const token of staleTokens) {
-            try {
-              // Final safety: skip if input mint resolves to SOL (prevents SOL→SOL swap)
-              const resolvedInput = normalizeMint(token.mint);
-              if (resolvedInput === SOL_MINT) {
-                log("cron", `Skipping stale swap for ${token.symbol} — resolves to SOL mint`);
-                continue;
-              }
-              log("cron", `Swapping stale ${token.symbol} ($${token.usd.toFixed(2)}) → SOL`);
-              const swapResult = await swapToken({ input_mint: token.mint, output_mint: SOL_MINT, amount: token.balance });
-              if (swapResult?.success) {
-                log("cron", `Stale swap OK: ${token.symbol} → ${swapResult.amount_out ?? "?"} SOL (tx: ${swapResult.tx})`);
-              } else {
-                log("cron_warn", `Stale swap failed for ${token.symbol}: ${swapResult?.error || "unknown"}`);
-              }
-            } catch (swapErr) {
-              log("cron_warn", `Stale swap error for ${token.symbol}: ${swapErr.message}`);
-            }
-          }
-        }
-      } catch (cleanupErr) {
-        log("cron_warn", `Stale token cleanup failed: ${cleanupErr.message}`);
-      }
-
       log("cron", "No open positions — triggering screening cycle");
       mgmtReport = "No open positions. Triggering screening cycle.";
       runScreeningCycle().catch((e) => log("cron_error", `Triggered screening failed: ${e.message}`));
@@ -329,7 +288,7 @@ export async function runManagementCycle({ silent = false } = {}) {
       const statusLabel = act.action === "INSTRUCTION" ? "HOLD (instruction)" : act.action;
       let line = `**${p.pair}** | Age: ${p.age_minutes ?? "?"}m | Val: ${val} | Unclaimed: ${unclaimed} | PnL: ${p.pnl_pct ?? "?"}% | Yield: ${p.fee_per_tvl_24h ?? "?"}% | ${inRange} | ${statusLabel}`;
       if (p.instruction) line += `\nNote: "${p.instruction}"`;
-      if (act.action === "CLOSE" && act.rule === "exit") line += `\n⚡ System Exit: ${act.reason}`;
+      if (act.action === "CLOSE" && act.rule === "exit") line += `\n⚡ Trailing TP: ${act.reason}`;
       if (act.action === "CLOSE" && act.rule && act.rule !== "exit") line += `\nRule ${act.rule}: ${act.reason}`;
       if (act.action === "CLAIM") line += `\n→ Claiming fees`;
       return line;
@@ -353,39 +312,28 @@ export async function runManagementCycle({ silent = false } = {}) {
     if (actionPositions.length > 0) {
       log("cron", `Management: ${actionPositions.length} action(s) needed — invoking LLM [model: ${config.llm.managementModel}]`);
 
-      const actionBlocks = [];
-      // Fetch chart indicator exit signals for action positions (parallel, non-blocking)
-      const indicatorResults = await Promise.allSettled(
-        actionPositions.map((p) => p.base_mint ? checkExitConfirmation(p.base_mint) : Promise.resolve(null))
-      );
-      for (let i = 0; i < actionPositions.length; i++) {
-        const p = actionPositions[i];
+      const actionBlocks = actionPositions.map((p) => {
         const act = actionMap.get(p.position);
-        const indResult = indicatorResults[i]?.status === "fulfilled" ? indicatorResults[i].value : null;
-        const block = [
+        return [
           `POSITION: ${p.pair} (${p.position})`,
           `  pool: ${p.pool}`,
           `  action: ${act.action}${act.rule && act.rule !== "exit" ? ` — Rule ${act.rule}: ${act.reason}` : ""}${act.rule === "exit" ? ` — ⚡ Trailing TP: ${act.reason}` : ""}`,
           `  pnl_pct: ${p.pnl_pct}% | unclaimed_fees: ${cur}${p.unclaimed_fees_usd} | value: ${cur}${p.total_value_usd} | fee_per_tvl_24h: ${p.fee_per_tvl_24h ?? "?"}%`,
           `  bins: lower=${p.lower_bin} upper=${p.upper_bin} active=${p.active_bin} | oor_minutes: ${p.minutes_out_of_range ?? 0}`,
           p.instruction ? `  instruction: "${p.instruction}"` : null,
-          indResult ? `  chart_exit_signal: [${indResult.preset}] ${indResult.confirmed ? "✅ CONFIRMED" : "❌ not confirmed"} — ${indResult.reason}` : null,
         ].filter(Boolean).join("\n");
-        actionBlocks.push(block);
-      }
-      const actionBlocksText = actionBlocks.join("\n\n");
+      }).join("\n\n");
 
       const { content } = await agentLoop(`
 MANAGEMENT ACTION REQUIRED — ${actionPositions.length} position(s)
 
-${actionBlocksText}
+${actionBlocks}
 
 RULES:
 - CLOSE: call close_position only — it handles fee claiming internally, do NOT call claim_fees first
 - CLAIM: call claim_fees with position address
 - INSTRUCTION: evaluate the instruction condition. If met → close_position. If not → HOLD, do nothing.
 - ⚡ exit alerts: close immediately, no exceptions
-- chart_exit_signal: if present, it's an optional confirmation from chart indicators. ✅ = supports the exit decision. ❌ = indicators don't confirm yet — still execute hard rules (stop loss, trailing TP), but note it in your report.
 
 Execute the required actions. Do NOT re-evaluate CLOSE/CLAIM — rules already applied. Just execute.
 After executing, write a brief one-line result per position.
@@ -498,18 +446,16 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const allCandidates = [];
     for (const pool of candidates) {
       const mint = pool.base?.mint;
-      const [smartWallets, narrative, tokenInfo, indicatorSummary] = await Promise.allSettled([
+      const [smartWallets, narrative, tokenInfo] = await Promise.allSettled([
         checkSmartWalletsOnPool({ pool_address: pool.pool }),
         mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
         mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
-        mint ? getIndicatorSummary(mint) : Promise.resolve(null),
       ]);
       allCandidates.push({
         pool,
         sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
         n: narrative.status === "fulfilled" ? narrative.value : null,
         ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
-        ind: indicatorSummary.status === "fulfilled" ? indicatorSummary.value : null,
         mem: recallForPool(pool.pool),
       });
       await new Promise(r => setTimeout(r, 150)); // avoid 429s
@@ -540,9 +486,6 @@ export async function runScreeningCycle({ silent = false } = {}) {
     });
 
     if (passing.length === 0) {
-      const examples = filteredOut.slice(0, 3)
-        .map((entry) => `- ${entry.name}: ${entry.reason}`)
-        .join("\n");
       const combined = filteredOut.length > 0 ? filteredOut : earlyFilteredExamples;
       const combinedExamples = combined.slice(0, 3)
         .map((entry) => `- ${entry.name}: ${entry.reason}`)
@@ -560,13 +503,43 @@ export async function runScreeningCycle({ silent = false } = {}) {
       return screenReport;
     }
 
+    if (passing.length === 1) {
+      const skipReason = getLoneCandidateSkipReason(passing[0]);
+      if (skipReason) {
+        const candidateName = passing[0].pool?.name || "unknown";
+        screenReport = [
+          "⛔ NO DEPLOY",
+          "",
+          "Cycle finished with no valid entry.",
+          "",
+          "BEST LOOKING CANDIDATE",
+          candidateName,
+          "",
+          "WHY SKIPPED",
+          `Only one candidate survived filtering, but it was not worth deploying: ${skipReason}.`,
+          "",
+          "REJECTED",
+          `- ${candidateName}: ${skipReason}`,
+        ].join("\n");
+        appendDecision({
+          type: "no_deploy",
+          actor: "SCREENER",
+          summary: "Single candidate skipped",
+          reason: skipReason,
+          pool: passing[0].pool?.pool,
+          pool_name: candidateName,
+        });
+        return screenReport;
+      }
+    }
+
     // Pre-fetch active_bin for all passing candidates in parallel
     const activeBinResults = await Promise.allSettled(
       passing.map(({ pool }) => getActiveBin({ pool_address: pool.pool }))
     );
 
     // Build compact candidate blocks
-    const candidateBlocks = passing.map(({ pool, sw, n, ti, ind, mem }, i) => {
+    const candidateBlocks = passing.map(({ pool, sw, n, ti, mem }, i) => {
       const botPct = ti?.audit?.bot_holders_pct ?? "?";
       const top10Pct = ti?.audit?.top_holders_pct ?? "?";
       const feesSol = ti?.global_fees_sol ?? "?";
@@ -600,7 +573,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
 
       const block = [
         `POOL: ${pool.name} (${pool.pool})`,
-        `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol/tvl=${pool.vol_active_tvl_ratio ?? "?"}x, vol=$${pool.volume_window}, tvl=$${pool.active_tvl}, volatility=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
+        `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
         `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
         pvpLine,
         okxParts ? `  okx: ${okxParts}` : okxUnavailable ? `  okx: unavailable` : null,
@@ -609,7 +582,6 @@ export async function runScreeningCycle({ silent = false } = {}) {
         `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
         activeBin != null ? `  active_bin: ${activeBin}` : null,
         priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
-        ind ? `  chart_indicators: ${ind}` : null,
         n?.narrative ? `  narrative_untrusted: ${sanitizeUntrustedPromptText(n.narrative, 500)}` : `  narrative_untrusted: none`,
         mem ? `  memory_untrusted: ${sanitizeUntrustedPromptText(mem, 500)}` : null,
       ].filter(Boolean).join("\n");
@@ -633,6 +605,8 @@ export async function runScreeningCycle({ silent = false } = {}) {
 
     const weightsSummary = config.darwin?.enabled ? getWeightsSummary() : null;
 
+    let deployAttempted = false;
+    let deploySucceeded = false;
     const { content } = await agentLoop(`
 SCREENING CYCLE
 ${strategyBlock}
@@ -642,13 +616,13 @@ PRE-LOADED CANDIDATES (${passing.length} pools):
 ${candidateBlocks.join("\n\n")}
 
 STEPS:
-1. Pick the best candidate based on narrative quality, smart wallets, pool metrics, and chart indicators (if available).
-   - chart_indicators line: if present with entry ✅, it's a confirming signal. If ❌ or missing, proceed with normal judgment — indicators are optional.
-2. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
-   bins_below = round(35 + (volatility/5)*55) clamped to [35,${config.strategy.binsBelow}].
+1. Decide if any candidate is actually worth deploying. One surviving candidate is not automatically good enough.
+2. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
+3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
+   bins_below = round(${config.strategy.minBinsBelow} + (volatility/5)*(${config.strategy.maxBinsBelow - config.strategy.minBinsBelow})) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}].
    For single-side SOL deploys, do not invent upside:
    set amount_y only, keep amount_x = 0, keep bins_above = 0, and let the upper bin stay at the active bin.
-3. Report in this exact format (no tables, no extra sections):
+4. Report in this exact format (no tables, no extra sections):
    🚀 DEPLOYED
 
    <pool name>
@@ -687,7 +661,7 @@ STEPS:
 
    WHY THIS WON
    <2-4 concise sentences on why this pool won, key risks, and why it still beat the alternatives>
-4. If no pool qualifies, report in this exact format instead:
+5. If no pool qualifies, report in this exact format instead:
    ⛔ NO DEPLOY
 
    Cycle finished with no valid entry.
@@ -704,8 +678,17 @@ IMPORTANT:
 - Never write "unknown" for OKX. Use real values, omit missing fields, or write exactly "OKX: unavailable".
 - Keep the whole report compact and highly scannable for Telegram.
       `, config.llm.maxSteps, [], "SCREENER", config.llm.screeningModel, 2048, {
-        onToolStart: async ({ name }) => { await liveMessage?.toolStart(name); },
-        onToolFinish: async ({ name, result, success }) => { await liveMessage?.toolFinish(name, result, success); },
+        onToolStart: async ({ name }) => {
+          if (name === "deploy_position") deployAttempted = true;
+          await liveMessage?.toolStart(name);
+        },
+        onToolFinish: async ({ name, result, success }) => {
+          if (name === "deploy_position") {
+            deployAttempted = true;
+            deploySucceeded = Boolean(success && result?.success !== false && !result?.error && !result?.blocked);
+          }
+          await liveMessage?.toolFinish(name, result, success);
+        },
       });
     screenReport = content;
     if (/⛔\s*NO DEPLOY/i.test(content)) {
@@ -713,6 +696,13 @@ IMPORTANT:
         type: "no_deploy",
         actor: "SCREENER",
         summary: "LLM chose no deploy",
+        reason: stripThink(content).slice(0, 500),
+      });
+    } else if (!deploySucceeded) {
+      appendDecision({
+        type: "no_deploy",
+        actor: "SCREENER",
+        summary: deployAttempted ? "Deploy attempt did not succeed" : "No successful deploy in screening cycle",
         reason: stripThink(content).slice(0, 500),
       });
     }
@@ -808,10 +798,9 @@ Summarize the current portfolio health, total fees earned, and performance of al
         if (closeRule) {
           const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
           const sinceLastTrigger = Date.now() - _pollTriggeredAt;
-          const isEmergency = closeRule.rule === 1 || closeRule.rule === 3 || closeRule.rule === 6;
-          if (isEmergency || sinceLastTrigger >= cooldownMs) {
+          if (sinceLastTrigger >= cooldownMs) {
             _pollTriggeredAt = Date.now();
-            log("state", `[PnL poll] ${isEmergency ? "EMERGENCY" : "Deterministic"} close rule: ${p.pair} — Rule ${closeRule.rule}: ${closeRule.reason} — triggering management`);
+            log("state", `[PnL poll] Deterministic close rule: ${p.pair} — Rule ${closeRule.rule}: ${closeRule.reason} — triggering management`);
             runManagementCycle({ silent: true }).catch((e) => log("cron_error", `Poll-triggered management failed: ${e.message}`));
           } else {
             log("state", `[PnL poll] Deterministic close rule: ${p.pair} — Rule ${closeRule.rule}: ${closeRule.reason} — cooldown (${Math.round((cooldownMs - sinceLastTrigger) / 1000)}s left)`);
@@ -895,8 +884,7 @@ function getDeterministicCloseRule(position, managementConfig) {
     position.active_bin != null &&
     position.upper_bin != null &&
     position.active_bin > position.upper_bin &&
-    (position.minutes_out_of_range ?? 0) >= managementConfig.outOfRangeWaitMinutes &&
-    (position.age_minutes == null || position.age_minutes >= (managementConfig.minAgeBeforeOOR ?? 0))
+    (position.minutes_out_of_range ?? 0) >= managementConfig.outOfRangeWaitMinutes
   ) {
     return { action: "CLOSE", rule: 4, reason: "OOR" };
   }
@@ -966,11 +954,12 @@ function formatConfigSnapshot() {
   return [
     "Config snapshot",
     "",
-    `Strategy: ${config.strategy.strategy} | binsBelow: ${config.strategy.binsBelow}`,
+    `Strategy: ${config.strategy.strategy} | binsBelow: ${config.strategy.minBinsBelow}-${config.strategy.maxBinsBelow} | default ${config.strategy.defaultBinsBelow}`,
     `Deploy: ${config.management.deployAmountSol} SOL | gasReserve: ${config.management.gasReserve} | maxPositions: ${config.risk.maxPositions}`,
     `Stop loss: ${config.management.stopLossPct}% | take profit: ${config.management.takeProfitPct}%`,
     `Trailing: ${config.management.trailingTakeProfit ? "on" : "off"} | trigger ${config.management.trailingTriggerPct}% | drop ${config.management.trailingDropPct}%`,
     `OOR: ${config.management.outOfRangeWaitMinutes}m | cooldown ${config.management.oorCooldownTriggerCount}x / ${config.management.oorCooldownHours}h`,
+    `Repeat deploy cooldown: ${config.management.repeatDeployCooldownEnabled ? "on" : "off"} | ${config.management.repeatDeployCooldownTriggerCount}x / ${config.management.repeatDeployCooldownHours}h | min fee earned ${config.management.repeatDeployCooldownMinFeeEarnedPct}% | ${config.management.repeatDeployCooldownScope}`,
     `Yield floor: ${config.management.minFeePerTvl24h}% | min age ${config.management.minAgeBeforeYieldCheck}m`,
     `Screening: ${config.screening.category} / ${config.screening.timeframe} | TVL ${config.screening.minTvl}-${config.screening.maxTvl}`,
     `Intervals: manage ${config.schedule.managementIntervalMin}m | screen ${config.schedule.screeningIntervalMin}m`,
@@ -990,6 +979,247 @@ function parseConfigValue(raw) {
   return value;
 }
 
+function settingValue(key) {
+  const values = {
+    solMode: config.management.solMode,
+    lpAgentRelayEnabled: config.api.lpAgentRelayEnabled,
+    chartIndicatorsEnabled: config.indicators.enabled,
+    trailingTakeProfit: config.management.trailingTakeProfit,
+    useDiscordSignals: config.screening.useDiscordSignals,
+    blockPvpSymbols: config.screening.blockPvpSymbols,
+    strategy: config.strategy.strategy,
+    minBinsBelow: config.strategy.minBinsBelow,
+    maxBinsBelow: config.strategy.maxBinsBelow,
+    defaultBinsBelow: config.strategy.defaultBinsBelow,
+    deployAmountSol: config.management.deployAmountSol,
+    gasReserve: config.management.gasReserve,
+    maxPositions: config.risk.maxPositions,
+    maxDeployAmount: config.risk.maxDeployAmount,
+    takeProfitPct: config.management.takeProfitPct,
+    stopLossPct: config.management.stopLossPct,
+    trailingTriggerPct: config.management.trailingTriggerPct,
+    trailingDropPct: config.management.trailingDropPct,
+    repeatDeployCooldownEnabled: config.management.repeatDeployCooldownEnabled,
+    repeatDeployCooldownTriggerCount: config.management.repeatDeployCooldownTriggerCount,
+    repeatDeployCooldownHours: config.management.repeatDeployCooldownHours,
+    repeatDeployCooldownMinFeeEarnedPct: config.management.repeatDeployCooldownMinFeeEarnedPct,
+    managementIntervalMin: config.schedule.managementIntervalMin,
+    screeningIntervalMin: config.schedule.screeningIntervalMin,
+    indicatorEntryPreset: config.indicators.entryPreset,
+    indicatorExitPreset: config.indicators.exitPreset,
+    rsiLength: config.indicators.rsiLength,
+    indicatorIntervals: config.indicators.intervals,
+    requireAllIntervals: config.indicators.requireAllIntervals,
+  };
+  return values[key];
+}
+
+function fmtSettingValue(value) {
+  if (Array.isArray(value)) return value.join(",");
+  if (typeof value === "boolean") return value ? "on" : "off";
+  return String(value);
+}
+
+function settingButton(label, data) {
+  return { text: label, callback_data: data };
+}
+
+function toggleButton(key, label) {
+  return settingButton(`${label}: ${fmtSettingValue(settingValue(key))}`, `cfg:toggle:${key}`);
+}
+
+function stepButtons(key, label, step, { digits = 2 } = {}) {
+  const value = Number(settingValue(key));
+  const shown = Number.isFinite(value) ? value.toFixed(digits).replace(/\.?0+$/, "") : "?";
+  return [
+    settingButton(`- ${label}`, `cfg:step:${key}:${-step}`),
+    settingButton(`${label}: ${shown}`, `cfg:noop`),
+    settingButton(`+ ${label}`, `cfg:step:${key}:${step}`),
+  ];
+}
+
+function renderSettingsMenu(page = "main") {
+  const title = page === "main" ? "Settings menu" : `Settings: ${page}`;
+  const summary = [
+    title,
+    "",
+    `Mode: ${config.management.solMode ? "SOL" : "USD"} | Relay: ${config.api.lpAgentRelayEnabled ? "on" : "off"}`,
+    `Strategy: ${config.strategy.strategy} | bins ${config.strategy.minBinsBelow}-${config.strategy.maxBinsBelow} | deploy ${config.management.deployAmountSol} SOL`,
+    `TP/SL: ${config.management.takeProfitPct}% / ${config.management.stopLossPct}% | trailing ${config.management.trailingTakeProfit ? "on" : "off"}`,
+    `Indicators: ${config.indicators.enabled ? "on" : "off"} | entry ${config.indicators.entryPreset} | ${fmtSettingValue(config.indicators.intervals)}`,
+  ].join("\n");
+
+  const nav = [
+    [
+      settingButton("Main", "cfg:page:main"),
+      settingButton("Risk", "cfg:page:risk"),
+      settingButton("Screen", "cfg:page:screen"),
+      settingButton("Indicators", "cfg:page:indicators"),
+    ],
+  ];
+
+  const footer = [
+    [
+      settingButton("Refresh", `cfg:page:${page}`),
+      settingButton("Close", "cfg:close"),
+    ],
+  ];
+
+  let rows;
+  if (page === "risk") {
+    rows = [
+      stepButtons("deployAmountSol", "Deploy", 0.1),
+      stepButtons("gasReserve", "Gas", 0.05),
+      stepButtons("maxPositions", "Max pos", 1, { digits: 0 }),
+      stepButtons("maxDeployAmount", "Max SOL", 1, { digits: 0 }),
+      stepButtons("takeProfitPct", "TP %", 1, { digits: 0 }),
+      stepButtons("stopLossPct", "SL %", 5, { digits: 0 }),
+      [toggleButton("trailingTakeProfit", "Trailing TP")],
+      stepButtons("trailingTriggerPct", "Trail trigger", 0.5, { digits: 1 }),
+      stepButtons("trailingDropPct", "Trail drop", 0.5, { digits: 1 }),
+      [toggleButton("repeatDeployCooldownEnabled", "Repeat cooldown")],
+      stepButtons("repeatDeployCooldownTriggerCount", "Repeat count", 1, { digits: 0 }),
+      stepButtons("repeatDeployCooldownHours", "Repeat hrs", 1, { digits: 0 }),
+      stepButtons("repeatDeployCooldownMinFeeEarnedPct", "Fee earned %", 0.1, { digits: 1 }),
+    ];
+  } else if (page === "screen") {
+    rows = [
+      [toggleButton("useDiscordSignals", "Discord signals"), toggleButton("blockPvpSymbols", "PVP hard block")],
+      [
+        settingButton(`Strategy: spot`, "cfg:set:strategy:spot"),
+        settingButton(`Strategy: bid_ask`, "cfg:set:strategy:bid_ask"),
+      ],
+      stepButtons("minBinsBelow", "Min bins", 1, { digits: 0 }),
+      stepButtons("maxBinsBelow", "Max bins", 1, { digits: 0 }),
+      stepButtons("defaultBinsBelow", "Default bins", 1, { digits: 0 }),
+      stepButtons("managementIntervalMin", "Manage min", 1, { digits: 0 }),
+      stepButtons("screeningIntervalMin", "Screen min", 5, { digits: 0 }),
+    ];
+  } else if (page === "indicators") {
+    rows = [
+      [toggleButton("chartIndicatorsEnabled", "Chart indicators"), toggleButton("requireAllIntervals", "Require all TF")],
+      [
+        settingButton("TF: 5m", "cfg:set:indicatorIntervals:5_MINUTE"),
+        settingButton("TF: 15m", "cfg:set:indicatorIntervals:15_MINUTE"),
+        settingButton("TF: both", "cfg:set:indicatorIntervals:both"),
+      ],
+      [
+        settingButton("Entry: ST", "cfg:set:indicatorEntryPreset:supertrend_break"),
+        settingButton("Entry: RSI", "cfg:set:indicatorEntryPreset:rsi_reversal"),
+        settingButton("Entry: ST/RSI", "cfg:set:indicatorEntryPreset:supertrend_or_rsi"),
+      ],
+      [
+        settingButton("Exit: ST", "cfg:set:indicatorExitPreset:supertrend_break"),
+        settingButton("Exit: RSI", "cfg:set:indicatorExitPreset:rsi_reversal"),
+        settingButton("Exit: BB+RSI", "cfg:set:indicatorExitPreset:bb_plus_rsi"),
+      ],
+      stepButtons("rsiLength", "RSI len", 1, { digits: 0 }),
+    ];
+  } else {
+    rows = [
+      [toggleButton("solMode", "SOL mode"), toggleButton("lpAgentRelayEnabled", "LPAgent relay")],
+      [toggleButton("chartIndicatorsEnabled", "Chart indicators"), toggleButton("trailingTakeProfit", "Trailing TP")],
+      [
+        settingButton("Risk / deploy", "cfg:page:risk"),
+        settingButton("Screening", "cfg:page:screen"),
+      ],
+      [
+        settingButton("Indicators", "cfg:page:indicators"),
+        settingButton("Show config", "cfg:show"),
+      ],
+    ];
+  }
+
+  return { text: summary, keyboard: [...nav, ...rows, ...footer] };
+}
+
+async function showSettingsMenu({ messageId = null, page = "main" } = {}) {
+  const menu = renderSettingsMenu(page);
+  if (messageId) {
+    await editMessageWithButtons(menu.text, messageId, menu.keyboard);
+  } else {
+    await sendMessageWithButtons(menu.text, menu.keyboard);
+  }
+}
+
+function normalizeMenuValue(key, raw) {
+  if (key === "indicatorIntervals") {
+    if (raw === "both") return ["5_MINUTE", "15_MINUTE"];
+    return [raw];
+  }
+  return parseConfigValue(raw);
+}
+
+async function applySettingsMenuCallback(msg) {
+  const data = msg.callbackData || msg.text || "";
+  const parts = data.split(":");
+  const action = parts[1];
+  let page = "main";
+
+  if (action === "noop") {
+    await answerCallbackQuery(msg.callbackQueryId);
+    return;
+  }
+  if (action === "close") {
+    await answerCallbackQuery(msg.callbackQueryId, "Closed");
+    await editMessage("Settings menu closed.", msg.messageId);
+    return;
+  }
+  if (action === "show") {
+    await answerCallbackQuery(msg.callbackQueryId);
+    await editMessageWithButtons(formatConfigSnapshot(), msg.messageId, [[settingButton("Back", "cfg:page:main")]]);
+    return;
+  }
+  if (action === "page") {
+    page = parts[2] || "main";
+    await answerCallbackQuery(msg.callbackQueryId);
+    await showSettingsMenu({ messageId: msg.messageId, page });
+    return;
+  }
+
+  const key = parts[2];
+  let value;
+  if (action === "toggle") {
+    value = !Boolean(settingValue(key));
+  } else if (action === "step") {
+    const current = Number(settingValue(key));
+    const delta = Number(parts[3]);
+    if (!Number.isFinite(current) || !Number.isFinite(delta)) {
+      await answerCallbackQuery(msg.callbackQueryId, "Invalid setting");
+      return;
+    }
+    value = Number((current + delta).toFixed(4));
+    if (key === "maxPositions") value = Math.max(1, Math.round(value));
+    if (key === "rsiLength") value = Math.max(2, Math.round(value));
+    if (key === "repeatDeployCooldownTriggerCount") value = Math.max(1, Math.round(value));
+    if (key === "repeatDeployCooldownHours") value = Math.max(0, Math.round(value));
+    if (key === "repeatDeployCooldownMinFeeEarnedPct") value = Math.max(0, value);
+    if (["minBinsBelow", "maxBinsBelow", "defaultBinsBelow"].includes(key)) value = Math.max(35, Math.round(value));
+    if (["deployAmountSol", "gasReserve", "maxDeployAmount"].includes(key)) value = Math.max(0, value);
+  } else if (action === "set") {
+    value = normalizeMenuValue(key, parts.slice(3).join(":"));
+  } else {
+    await answerCallbackQuery(msg.callbackQueryId, "Unknown action");
+    return;
+  }
+
+  const result = await executeTool("update_config", {
+    changes: { [key]: value },
+    reason: "Telegram settings menu",
+  });
+  if (!result?.success) {
+    await answerCallbackQuery(msg.callbackQueryId, "Config update failed");
+    return;
+  }
+  page = key.startsWith("indicator") || key === "chartIndicatorsEnabled" || key === "rsiLength" || key === "requireAllIntervals"
+    ? "indicators"
+    : ["useDiscordSignals", "blockPvpSymbols", "strategy", "minBinsBelow", "maxBinsBelow", "defaultBinsBelow", "managementIntervalMin", "screeningIntervalMin"].includes(key)
+      ? "screen"
+      : "risk";
+  await answerCallbackQuery(msg.callbackQueryId, `Updated ${key}`);
+  await showSettingsMenu({ messageId: msg.messageId, page });
+}
+
 function formatHelpText() {
   return [
     "Telegram commands",
@@ -1003,15 +1233,8 @@ function formatHelpText() {
     "/closeall — close all open positions",
     "/set <n> <note> — set note/instruction on position",
     "/config — show important runtime config",
+    "/settings — button menu for common config",
     "/setcfg <key> <value> — update persisted config",
-    "/pnl [hours] — closed positions PnL (default 48h)",
-    "/perfsum — overall performance summary",
-    "/lessons [n] — recent derived lessons (default 10)",
-    "/dist [hours] — close_reason distribution analysis",
-    "/winners [n] — top profitable pools (default 10)",
-    "/losers [n] — worst pools historical (default 10)",
-    "/risk — risk dashboard: drawdown, streaks, exposure",
-    "/hivestatus — hive mind connection + cache status",
     "/screen — refresh deterministic candidate list",
     "/candidates — show latest cached candidates",
     "/deploy <n> — deploy candidate by cached index",
@@ -1049,9 +1272,34 @@ async function deployLatestCandidate(index) {
   if (!candidate) {
     throw new Error("Invalid candidate index. Run /screen first.");
   }
+  if (_latestCandidates.length === 1) {
+    const mint = candidate.base?.mint || candidate.base_mint || null;
+    const [smartWallets, narrative, tokenInfo] = await Promise.allSettled([
+      checkSmartWalletsOnPool({ pool_address: candidate.pool }),
+      mint ? getTokenNarrative({ mint }) : Promise.resolve(null),
+      mint ? getTokenInfo({ query: mint }) : Promise.resolve(null),
+    ]);
+    const context = {
+      pool: candidate,
+      sw: smartWallets.status === "fulfilled" ? smartWallets.value : null,
+      n: narrative.status === "fulfilled" ? narrative.value : null,
+      ti: tokenInfo.status === "fulfilled" ? tokenInfo.value?.results?.[0] : null,
+    };
+    const skipReason = getLoneCandidateSkipReason(context);
+    if (skipReason) {
+      appendDecision({
+        type: "no_deploy",
+        actor: "SCREENER",
+        summary: "Single cached candidate skipped",
+        reason: skipReason,
+        pool: candidate.pool,
+        pool_name: candidate.name,
+      });
+      throw new Error(`NO DEPLOY: only cached candidate ${candidate.name} is not worth deploying — ${skipReason}`);
+    }
+  }
   const deployAmount = computeDeployAmount((await getWalletBalances()).sol);
-  const maxBins = config.strategy.binsBelow;
-  const binsBelow = Math.max(35, Math.min(maxBins, Math.round(35 + ((Number(candidate.volatility) || 0) / 5) * 55)));
+  const binsBelow = computeBinsBelow(candidate.volatility);
   const result = await executeTool("deploy_position", {
     pool_address: candidate.pool,
     amount_y: deployAmount,
@@ -1065,7 +1313,7 @@ async function deployLatestCandidate(index) {
     volatility: candidate.volatility,
     fee_tvl_ratio: candidate.fee_active_tvl_ratio ?? candidate.fee_tvl_ratio,
     organic_score: candidate.organic_score,
-    initial_value_usd: candidate.active_tvl ?? candidate.tvl ?? null,
+    initial_value_usd: candidate.tvl ?? candidate.active_tvl ?? null,
   });
   if (result?.success === false || result?.error) {
     throw new Error(result.error || "Deploy failed");
@@ -1098,6 +1346,18 @@ async function drainTelegramQueue() {
 async function telegramHandler(msg) {
   const text = msg?.text?.trim();
   if (!text) return;
+  if (msg?.isCallback && text.startsWith("cfg:")) {
+    try {
+      await applySettingsMenuCallback(msg);
+    } catch (e) {
+      await answerCallbackQuery(msg.callbackQueryId, e.message).catch(() => {});
+    }
+    return;
+  }
+  if (text === "/settings" || text === "/menu" || text === "/configmenu") {
+    await showSettingsMenu().catch((e) => sendMessage(`Settings error: ${e.message}`).catch(() => {}));
+    return;
+  }
   if (_managementBusy || _screeningBusy || busy) {
     if (_telegramQueue.length < 5) {
       _telegramQueue.push(msg);
@@ -1255,248 +1515,6 @@ async function telegramHandler(msg) {
     return;
   }
 
-  const pnlMatch = text.match(/^\/pnl(?:\s+(\d+))?$/i);
-  if (pnlMatch) {
-    try {
-      const hours = pnlMatch[1] ? parseInt(pnlMatch[1]) : 48;
-      const data = getPerformanceHistory({ hours, limit: 100 });
-      if (data.count === 0) {
-        await sendMessage(`No closed positions in last ${hours}h.`);
-        return;
-      }
-      const cur = config.management.solMode ? "◎" : "$";
-      const lines = data.positions.slice().reverse().map((p, i) => {
-        const sign = p.pnl_usd >= 0 ? "+" : "";
-        const pnl = `${sign}${cur}${p.pnl_usd?.toFixed(3) ?? "?"}`;
-        const pct = p.pnl_pct != null ? `${sign}${p.pnl_pct.toFixed(2)}%` : "?";
-        const fees = p.fees_earned_usd != null ? `fees ${cur}${p.fees_earned_usd.toFixed(3)}` : "";
-        const dur = p.minutes_held != null ? `${p.minutes_held}m` : "?";
-        const reason = (p.close_reason || "?").slice(0, 28);
-        return `${i + 1}. ${p.pool_name || "?"} | ${pnl} (${pct}) | ${fees} | ${dur} | ${reason}`;
-      });
-      const header = `📊 Last ${hours}h — ${data.count} closed | total: ${data.total_pnl_usd >= 0 ? "+" : ""}${cur}${data.total_pnl_usd} | win rate: ${data.win_rate_pct}%`;
-      const reasonCounts = {};
-      for (const p of data.positions) {
-        const r = p.close_reason || "unknown";
-        reasonCounts[r] = (reasonCounts[r] || 0) + 1;
-      }
-      const reasonLine = Object.entries(reasonCounts)
-        .sort((a, b) => b[1] - a[1])
-        .map(([r, n]) => `${r}: ${n}`)
-        .join(" | ");
-      await sendMessage(`${header}\n\n${lines.join("\n")}\n\nClose reasons: ${reasonLine}`);
-    } catch (e) {
-      await sendMessage(`Error: ${e.message}`).catch(() => {});
-    }
-    return;
-  }
-
-  if (text === "/perfsum") {
-    try {
-      const summary = getPerformanceSummary();
-      if (!summary) { await sendMessage("No performance data yet."); return; }
-      const cur = config.management.solMode ? "◎" : "$";
-      await sendMessage([
-        "📈 Performance summary (all-time)",
-        `Closed: ${summary.total_positions_closed}`,
-        `Total PnL: ${summary.total_pnl_usd >= 0 ? "+" : ""}${cur}${summary.total_pnl_usd}`,
-        `Avg PnL: ${summary.avg_pnl_pct >= 0 ? "+" : ""}${summary.avg_pnl_pct}%`,
-        `Avg range efficiency: ${summary.avg_range_efficiency_pct}%`,
-        `Win rate: ${summary.win_rate_pct}%`,
-        `Lessons stored: ${summary.total_lessons}`,
-      ].join("\n"));
-    } catch (e) {
-      await sendMessage(`Error: ${e.message}`).catch(() => {});
-    }
-    return;
-  }
-
-  const distMatch = text.match(/^\/(dist|distribution)(?:\s+(\d+))?$/i);
-  if (distMatch) {
-    try {
-      const hours = distMatch[2] ? parseInt(distMatch[2]) : 168; // default 7d
-      const data = getPerformanceHistory({ hours, limit: 1000 });
-      if (data.count === 0) {
-        await sendMessage(`No closed positions in last ${hours}h.`);
-        return;
-      }
-      const cur = config.management.solMode ? "◎" : "$";
-
-      // Bucket by close_reason
-      const buckets = {};
-      for (const p of data.positions) {
-        const r = (p.close_reason || "unknown").toUpperCase();
-        if (!buckets[r]) buckets[r] = { count: 0, total: 0, wins: 0, losses: 0, winSum: 0, lossSum: 0, durSum: 0, fees: 0 };
-        const b = buckets[r];
-        b.count++;
-        b.total += p.pnl_usd ?? 0;
-        b.fees += p.fees_earned_usd ?? 0;
-        b.durSum += p.minutes_held ?? 0;
-        if ((p.pnl_usd ?? 0) > 0) { b.wins++; b.winSum += p.pnl_usd; }
-        else { b.losses++; b.lossSum += Math.abs(p.pnl_usd ?? 0); }
-      }
-
-      const rows = Object.entries(buckets)
-        .map(([reason, b]) => ({
-          reason,
-          count: b.count,
-          total: b.total,
-          avg: b.total / b.count,
-          winRate: Math.round((b.wins / b.count) * 100),
-          avgWin: b.wins ? b.winSum / b.wins : 0,
-          avgLoss: b.losses ? b.lossSum / b.losses : 0,
-          avgDur: Math.round(b.durSum / b.count),
-          fees: b.fees,
-        }))
-        .sort((a, b) => b.count - a.count);
-
-      const lines = rows.map((r) => {
-        const sign = r.total >= 0 ? "+" : "";
-        const avgSign = r.avg >= 0 ? "+" : "";
-        return [
-          `[${r.reason}] n=${r.count}  total ${sign}${cur}${r.total.toFixed(2)}  avg ${avgSign}${cur}${r.avg.toFixed(3)}`,
-          `  WR ${r.winRate}%  avgW ${cur}${r.avgWin.toFixed(3)}  avgL ${cur}${r.avgLoss.toFixed(3)}  fees ${cur}${r.fees.toFixed(2)}  ${r.avgDur}m`,
-        ].join("\n");
-      });
-
-      // Aggregate stats
-      const totalWins = data.positions.filter((p) => (p.pnl_usd ?? 0) > 0);
-      const totalLosses = data.positions.filter((p) => (p.pnl_usd ?? 0) <= 0);
-      const avgWin = totalWins.length ? totalWins.reduce((s, p) => s + p.pnl_usd, 0) / totalWins.length : 0;
-      const avgLoss = totalLosses.length ? Math.abs(totalLosses.reduce((s, p) => s + (p.pnl_usd ?? 0), 0) / totalLosses.length) : 0;
-      const payoff = avgLoss > 0 ? avgWin / avgLoss : 0;
-      const profitFactor = totalLosses.length && avgLoss > 0
-        ? totalWins.reduce((s, p) => s + p.pnl_usd, 0) / Math.abs(totalLosses.reduce((s, p) => s + p.pnl_usd, 0))
-        : 0;
-
-      const header = `📊 Distribution last ${hours}h — ${data.count} closes`;
-      const summary = [
-        `Total: ${data.total_pnl_usd >= 0 ? "+" : ""}${cur}${data.total_pnl_usd}  WR ${data.win_rate_pct}%`,
-        `avgW ${cur}${avgWin.toFixed(3)}  avgL ${cur}${avgLoss.toFixed(3)}  payoff ${payoff.toFixed(2)}x  PF ${profitFactor.toFixed(2)}`,
-      ].join("\n");
-
-      // Diagnosis hint
-      let hint = "";
-      if (payoff < 1.0 && data.win_rate_pct < 65) hint = "\n⚠ Payoff <1x AND WR <65%. Losers bigger than winners. Tighten stops or let winners run.";
-      else if (payoff < 0.8) hint = "\n⚠ Payoff <0.8x. Take-profit too early or stop-loss too wide.";
-      else if (data.win_rate_pct < 50) hint = "\n⚠ WR <50%. Entry quality issue — review screening filters.";
-
-      await sendMessage(`${header}\n${summary}\n\n${lines.join("\n\n")}${hint}`);
-    } catch (e) {
-      await sendMessage(`Error: ${e.message}`).catch(() => {});
-    }
-    return;
-  }
-
-  const lessonsMatch = text.match(/^\/lessons(?:\s+(\d+))?$/i);
-  if (lessonsMatch) {
-    try {
-      const limit = lessonsMatch[1] ? parseInt(lessonsMatch[1]) : 10;
-      const result = listLessons({ limit });
-      const lessons = result?.lessons || [];
-      if (!lessons.length) { await sendMessage("No lessons yet."); return; }
-      const lines = lessons.slice().reverse().map((l, i) => {
-        const tag = l.pinned ? "📌" : (l.role && l.role !== "all" ? `[${l.role}]` : "•");
-        const tags = l.tags?.length ? ` (${l.tags.join(",")})` : "";
-        return `${i + 1}. ${tag} ${l.rule}${tags}`;
-      });
-      await sendMessage(`🧠 Recent lessons (${lessons.length}/${result.total}):\n\n${lines.join("\n")}`);
-    } catch (e) {
-      await sendMessage(`Error: ${e.message}`).catch(() => {});
-    }
-    return;
-  }
-
-  const winnersMatch = text.match(/^\/winners(?:\s+(\d+))?$/i);
-  if (winnersMatch) {
-    try {
-      const limit = winnersMatch[1] ? parseInt(winnersMatch[1]) : 10;
-      const top = getPoolLeaderboard({ mode: "winners", limit });
-      if (!top.length) { await sendMessage("No closed positions yet."); return; }
-      const cur = config.management.solMode ? "◎" : "$";
-      const lines = top.map((p, i) => {
-        const sign = p.total_pnl_usd >= 0 ? "+" : "";
-        const name = (p.pool_name || (p.pool ? p.pool.slice(0, 8) : "?")).slice(0, 24);
-        return `${i + 1}. ${name} | ${sign}${cur}${p.total_pnl_usd.toFixed(2)} | ${p.count}× | WR ${p.win_rate_pct}% | fees ${cur}${p.total_fees_usd.toFixed(2)}`;
-      });
-      await sendMessage(`🏆 Top ${top.length} winning pools:\n\n${lines.join("\n")}`);
-    } catch (e) {
-      await sendMessage(`Error: ${e.message}`).catch(() => {});
-    }
-    return;
-  }
-
-  const losersMatch = text.match(/^\/losers(?:\s+(\d+))?$/i);
-  if (losersMatch) {
-    try {
-      const limit = losersMatch[1] ? parseInt(losersMatch[1]) : 10;
-      const bottom = getPoolLeaderboard({ mode: "losers", limit });
-      if (!bottom.length) { await sendMessage("No closed positions yet."); return; }
-      const cur = config.management.solMode ? "◎" : "$";
-      const lines = bottom.map((p, i) => {
-        const sign = p.total_pnl_usd >= 0 ? "+" : "";
-        const name = (p.pool_name || (p.pool ? p.pool.slice(0, 8) : "?")).slice(0, 24);
-        return `${i + 1}. ${name} | ${sign}${cur}${p.total_pnl_usd.toFixed(2)} | ${p.count}× | WR ${p.win_rate_pct}% | avg ${sign}${cur}${p.avg_pnl_usd.toFixed(2)}`;
-      });
-      await sendMessage(`💀 Worst ${bottom.length} pools (blacklist candidates):\n\n${lines.join("\n")}`);
-    } catch (e) {
-      await sendMessage(`Error: ${e.message}`).catch(() => {});
-    }
-    return;
-  }
-
-  if (text === "/risk") {
-    try {
-      const r = getRiskSnapshot();
-      const cur = config.management.solMode ? "◎" : "$";
-      const sign = (n) => n >= 0 ? "+" : "";
-      const ddWarning = r.current_drawdown_usd > 0 ? "⚠️" : "✅";
-      const streakWarning = r.loss_streak >= 3 ? "🔴" : r.loss_streak >= 2 ? "🟡" : "✅";
-      await sendMessage([
-        "🛡 Risk Dashboard",
-        "",
-        "═ PnL ═",
-        `24h: ${sign(r.pnl_24h)}${cur}${r.pnl_24h} (${r.closes_24h} closes, fees ${cur}${r.fees_24h})`,
-        `7d:  ${sign(r.pnl_7d)}${cur}${r.pnl_7d} (${r.closes_7d} closes, fees ${cur}${r.fees_7d})`,
-        `30d: ${sign(r.pnl_30d)}${cur}${r.pnl_30d}`,
-        "",
-        "═ Risk ═",
-        `${ddWarning} Current drawdown: ${cur}${r.current_drawdown_usd}`,
-        `Max drawdown 7d: ${cur}${r.max_drawdown_7d_usd}`,
-        `Worst single loss 7d: ${cur}${r.worst_single_loss_7d}`,
-        `${streakWarning} Loss streak: ${r.loss_streak}`,
-      ].join("\n"));
-    } catch (e) {
-      await sendMessage(`Error: ${e.message}`).catch(() => {});
-    }
-    return;
-  }
-
-  if (text === "/hivestatus" || text === "/hive") {
-    try {
-      const s = getHiveMindStatus();
-      const lines = [
-        "🐝 Hive Mind Status",
-        `Enabled: ${s.enabled ? "✅ YES" : "❌ NO"}`,
-        `URL: ${s.url || "(not set)"}`,
-        `API Key: ${s.hasApiKey ? "✅ set" : "❌ missing"}`,
-        `Pull Mode: ${s.pullMode}`,
-        `Agent ID: ${s.agentId || "(none)"}`,
-        `Cached Lessons: ${s.cachedLessons}`,
-        `Cached Presets: ${s.cachedPresets}`,
-        `Last Pull: ${s.lastPulledAt || "never"}`,
-      ];
-      if (!s.enabled) {
-        lines.push("");
-        lines.push("⚠ Set HIVE_MIND_URL + HIVE_MIND_API_KEY env vars in Dokploy to enable.");
-      }
-      await sendMessage(lines.join("\n"));
-    } catch (e) {
-      await sendMessage(`Error: ${e.message}`).catch(() => {});
-    }
-    return;
-  }
-
   if (text === "/screen") {
     try {
       await sendMessage(await runDeterministicScreen(5)).catch(() => {});
@@ -1616,10 +1634,44 @@ function fmtPct(value) {
   return Number.isFinite(n) ? `${n.toFixed(2)}%` : "?";
 }
 
+function getLoneCandidateSkipReason({ pool, sw, n, ti } = {}) {
+  if (!pool) return "missing candidate data";
+  const smartWalletCount = Math.max(sw?.in_pool?.length ?? 0, Number(pool.gmgn_smart_wallets ?? 0) || 0);
+  const tokenInfo = ti || {};
+  const hasNarrative = !!n?.narrative;
+  const globalFeesSol = Number(tokenInfo.global_fees_sol ?? pool.gmgn_total_fee_sol);
+  const top10Pct = Number(tokenInfo.audit?.top_holders_pct ?? pool.gmgn_token_info_top10_pct ?? pool.gmgn_top10_holder_pct);
+  const botPct = Number(tokenInfo.audit?.bot_holders_pct ?? pool.gmgn_bot_degen_pct);
+  if (pool.is_wash) return "wash trading was flagged";
+  if (pool.is_rugpull && smartWalletCount === 0) return "rugpull risk was flagged and no smart wallets offset it";
+  if (pool.is_pvp && smartWalletCount === 0) return "PVP symbol conflict and no smart-wallet confirmation";
+  if (Number.isFinite(globalFeesSol) && globalFeesSol < config.screening.minTokenFeesSol) {
+    return `token fees ${globalFeesSol} SOL below minimum ${config.screening.minTokenFeesSol} SOL`;
+  }
+  if (Number.isFinite(top10Pct) && top10Pct > config.screening.maxTop10Pct) {
+    return `top10 concentration ${top10Pct}% above maximum ${config.screening.maxTop10Pct}%`;
+  }
+  if (Number.isFinite(botPct) && botPct > config.screening.maxBotHoldersPct) {
+    return `bot holders ${botPct}% above maximum ${config.screening.maxBotHoldersPct}%`;
+  }
+  if (!hasNarrative && smartWalletCount === 0) return "only candidate has no narrative and no smart-wallet confirmation";
+  return null;
+}
+
+function computeBinsBelow(volatility) {
+  const parsedVolatility = Number(volatility);
+  if (!Number.isFinite(parsedVolatility) || parsedVolatility <= 0) {
+    throw new Error(`Invalid volatility ${volatility ?? "unknown"} — refusing volatility-scaled deploy.`);
+  }
+  const lo = config.strategy.minBinsBelow;
+  const hi = config.strategy.maxBinsBelow;
+  return Math.max(lo, Math.min(hi, Math.round(lo + (parsedVolatility / 5) * (hi - lo))));
+}
+
 // Register restarter — when update_config changes intervals, running cron jobs get replaced
 registerCronRestarter(() => { if (cronStarted) startCronJobs(); });
 
-if (isTTY) {
+if (isMain && isTTY) {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -1746,7 +1798,7 @@ Commands:
       await runBusy(async () => {
         console.log("\nAgent is picking and deploying...\n");
         const { content: reply } = await agentLoop(
-          `get_top_candidates, pick the best one, get_active_bin, deploy_position with ${DEPLOY} SOL. Execute now, don't ask.`,
+          `get_top_candidates and deploy only if a candidate is clearly worth it. If there is only one weak candidate, report NO DEPLOY. For a valid deploy, use amount_y=${DEPLOY}, amount_x=0, bins_above=0, and bins_below from positive volatility. Execute now, don't ask.`,
           config.llm.maxSteps,
           [],
           "SCREENER"
@@ -1911,7 +1963,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
 
   rl.on("close", () => shutdown("stdin closed"));
 
-} else {
+} else if (isMain) {
   // Non-TTY: start immediately
   log("startup", "Non-TTY mode — starting cron cycles immediately.");
   startCronJobs();
@@ -1919,13 +1971,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
   startPolling(telegramHandler);
   (async () => {
     try {
-      const startupStep3 = process.env.DRY_RUN === "true"
-        ? `3. Ignore wallet SOL threshold in dry run: get_top_candidates then simulate deploy ${DEPLOY} SOL.`
-        : `3. If SOL >= ${config.management.minSolToOpen}: get_top_candidates then deploy ${DEPLOY} SOL.`;
-      await agentLoop(`
-STARTUP CHECK
-1. get_wallet_balance. 2. get_my_positions. ${startupStep3} 4. Report.
-      `, config.llm.maxSteps, [], "SCREENER");
+      await runScreeningCycle({ silent: false });
     } catch (e) {
       log("startup_error", e.message);
     }
