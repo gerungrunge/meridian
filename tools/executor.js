@@ -660,6 +660,21 @@ async function runSafetyChecks(name, args) {
           reason: `volatility ${args.volatility} is invalid. Refusing deploy because the volatility feed is unusable.`,
         };
       }
+
+      // Auto-correct bins_below using vol formula — LLM often defaults to minBinsBelow.
+      // Formula: round(minBinsBelow + (vol/5) * (maxBinsBelow - minBinsBelow)), clamped.
+      // Only corrects upward — never narrows a wider range the LLM intentionally chose.
+      if (Number.isFinite(requestedVolatility) && requestedVolatility > 0) {
+        const minB = Math.max(MIN_SAFE_BINS_BELOW, Number(config.strategy.minBinsBelow ?? MIN_SAFE_BINS_BELOW));
+        const maxB = Math.max(minB, Number(config.strategy.maxBinsBelow ?? minB));
+        const formulaBins = Math.round(minB + (requestedVolatility / 5) * (maxB - minB));
+        const targetBins  = Math.max(minB, Math.min(maxB, formulaBins));
+        if (requestedBinsBelow < targetBins) {
+          log("safety", `bins_below auto-corrected ${requestedBinsBelow} → ${targetBins} (vol=${requestedVolatility}, formula=${formulaBins}, range=[${minB},${maxB}])`);
+          args.bins_below = targetBins;
+        }
+      }
+
       if (
         args.downside_pct == null &&
         args.upside_pct == null &&

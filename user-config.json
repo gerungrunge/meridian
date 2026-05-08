@@ -78,7 +78,7 @@
 
                           ],
     "minTokenAgeHours":  2,
-    "maxTokenAgeHours":  null,
+    "maxTokenAgeHours":  2160,
     "athFilterPct":  0,
     "maxVolatility":  12,
     "minVolatility":  1.5,
