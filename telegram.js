@@ -133,6 +133,65 @@ export async function editMessage(text, messageId) {
   });
 }
 
+// ─── Inline-keyboard helpers ──────────────────────────────────────
+// `keyboard` is an array of rows; each row is an array of buttons
+// produced by something like `{ text: "Label", callback_data: "data" }`.
+
+function normalizeKeyboard(keyboard) {
+  if (!Array.isArray(keyboard)) return null;
+  return { inline_keyboard: keyboard };
+}
+
+export async function sendMessageWithButtons(text, keyboard) {
+  if (!TOKEN || !chatId) return null;
+  const reply_markup = normalizeKeyboard(keyboard);
+  return postTelegram("sendMessage", {
+    text: String(text).slice(0, 4096),
+    parse_mode: "HTML",
+    ...(reply_markup ? { reply_markup } : {}),
+  });
+}
+
+export async function editMessageWithButtons(text, messageId, keyboard) {
+  if (!TOKEN || !chatId || !messageId) return null;
+  const truncated = String(text).slice(0, 4096);
+  const reply_markup = normalizeKeyboard(keyboard);
+  // Bypass dedupe cache because keyboard layout may change while text stays same.
+  _lastEditTextByMessageId.set(messageId, truncated);
+  return postTelegram("editMessageText", {
+    message_id: messageId,
+    text: truncated,
+    parse_mode: "HTML",
+    ...(reply_markup ? { reply_markup } : {}),
+  });
+}
+
+export async function answerCallbackQuery(callbackQueryId, text = "") {
+  if (!TOKEN || !callbackQueryId) return null;
+  const payload = { callback_query_id: callbackQueryId };
+  if (text) {
+    payload.text = String(text).slice(0, 200);
+    payload.show_alert = false;
+  }
+  // Use raw fetch — postTelegram routes through chat_id which callback API doesn't take.
+  try {
+    const res = await fetch(`${BASE}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      log("telegram_error", `answerCallbackQuery ${res.status}: ${body.slice(0, 200)}`);
+      return null;
+    }
+    return await res.json();
+  } catch (e) {
+    log("telegram_error", `answerCallbackQuery failed: ${e.message}`);
+    return null;
+  }
+}
+
 export function hasActiveLiveMessage() {
   return _liveMessageDepth > 0;
 }
@@ -323,6 +382,28 @@ async function poll(onMessage) {
       const data = await res.json();
       for (const update of data.result || []) {
         _offset = update.update_id + 1;
+
+        // Inline-button click → dispatch as synthetic message with callback fields
+        if (update.callback_query) {
+          const cq = update.callback_query;
+          const synthetic = {
+            chat: cq.message?.chat,
+            from: cq.from,
+            text: cq.data || "",        // callback_data — index.js parses this
+            callbackQueryId: cq.id,
+            messageId: cq.message?.message_id,
+            callbackData: cq.data || "",
+            isCallback: true,
+          };
+          if (!isAuthorizedIncomingMessage(synthetic)) {
+            // Still acknowledge so Telegram client stops spinning
+            await answerCallbackQuery(cq.id).catch(() => {});
+            continue;
+          }
+          await onMessage(synthetic);
+          continue;
+        }
+
         const msg = update.message;
         if (!msg?.text) continue;
         if (!isAuthorizedIncomingMessage(msg)) continue;
