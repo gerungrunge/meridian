@@ -94,8 +94,19 @@ async function fetchLPSignal(pool_address) {
     const topStrategy = Object.entries(stratFreq)
       .sort((a, b) => b[1] - a[1])[0]?.[0] || null;
 
+    // LPAgent's suggestedStyle can be a string OR an object like
+    // { strategy: "bid_ask", style: "...", confidence: 0.8 }.
+    // Normalise to string so logs and downstream consumers stay sane.
+    const normaliseStrategy = (raw) => {
+      if (typeof raw === "string") return raw;
+      if (raw && typeof raw === "object") {
+        return raw.strategy || raw.style || raw.name || raw.preferredStrategy || null;
+      }
+      return null;
+    };
+
     const signal = {
-      suggested_strategy:    study.suggestedStyle || topStrategy || null,
+      suggested_strategy:    normaliseStrategy(study.suggestedStyle) || topStrategy || null,
       top_lper_count:        lpers.length,
       owner_count:           study.ownerCount          ?? hist.length,
       active_position_count: study.activePositionCount ?? 0,
