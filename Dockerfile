@@ -12,6 +12,10 @@ RUN npm install --omit=dev
 # Copy application source
 COPY . .
 
+# Persistent data directory — mount a volume here in production to survive redeploys.
+RUN mkdir -p /app/data
+ENV DATA_DIR=/app/data
+
 # Secrets are injected at RUNTIME via docker run -e / deployment platform.
 # They are NOT baked into the image.
 
