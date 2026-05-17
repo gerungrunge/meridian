@@ -1,5 +1,8 @@
 {
     "_changelog":  {
+                       "_note_r12":  "2026-05-13 R12 launchpad block + OOR fix. DUST-SOL (pump.fun token) -$5.83 single loss wiped multiple wins. Mint ended in 'pump' = pump.fun, holders 75 only, mcap dumped 48% in 2h22m. Also caught Rule 3 (pumped-far-above-range) closing bid_ask positions 2min after deploy, ignoring minAgeBeforeOOR. Both fixed in code (Rule 3 patch) and config (block risky launchpads).",
+                       "r12_block_pump_launchpads":  "blockedLaunchpads: [] → [pump.fun, letsbonk.fun] — pump.fun tokens dump fast, low organic, high bundle risk; letsbonk.fun similar profile",
+                       "r12_rule3_age_check":  "code fix in index.js getDeterministicCloseRule — Rule 3 now requires (age_minutes >= minAgeBeforeOOR) so bid_ask positions get pullback window before forced close",
                        "_note_r11":  "2026-05-05 R11 growth-mode: R10 results 24-48h post-tune: 13 closes (vs 8), +◎4.6 (vs +◎2.8), WR 69% (vs 63%), PF 9.85 (vs 7.09). Drought killed. Now push for wallet recovery to 1+ SOL. Two issues observed: (1) binsBelow=35 was both lower AND upper clamp — vol-based scaling formula disabled, all positions got 35 bins regardless of volatility, causing 3 quick PUMPED-above-range exits. (2) DEAD POOL 45m too tight — last close hit dead-pool at 166m for +◎0.77, more time would compound further.",
                        "r11_unlock_bins":  "binsBelow: 35 → 90 — was acting as both clamp ends, forcing fixed 35-bin range; now formula round(35 + vol/5*55) scales 35 (low vol) to 90 (high vol)",
                        "r11_dead_pool_extend":  "deadPoolMaxMinutes: 45 → 90 — let slow printers compound (recent 166m hold yielded +◎0.77)",
@@ -75,7 +78,8 @@
 
                           ],
     "blockedLaunchpads":  [
-
+                              "pump.fun",
+                              "letsbonk.fun"
                           ],
     "minTokenAgeHours":  2,
     "maxTokenAgeHours":  2160,
