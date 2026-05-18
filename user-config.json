@@ -1,5 +1,7 @@
 {
     "_changelog":  {
+                       "_note_r12b":  "2026-05-18 R12b drought rollback: 1+ hour zero deploys, ALL candidates were pump.fun. Market regime = pump.fun dominant. R12 full block too aggressive. DUST loss was outlier, not category-wide. LP tracker shows pump.fun tokens (WORLDCUP, Goblin) with 20 LPers + 9%+ ROI = profitable. Re-allow pump.fun, keep letsbonk.fun blocked (less proven). Existing quality filters (top10, bundle, mcap, fees) catch most rugs.",
+                       "r12b_unblock_pumpfun":  "blockedLaunchpads: [pump.fun, letsbonk.fun] → [letsbonk.fun] — pump.fun re-allowed; other filters still gate quality",
                        "_note_r12":  "2026-05-13 R12 launchpad block + OOR fix. DUST-SOL (pump.fun token) -$5.83 single loss wiped multiple wins. Mint ended in 'pump' = pump.fun, holders 75 only, mcap dumped 48% in 2h22m. Also caught Rule 3 (pumped-far-above-range) closing bid_ask positions 2min after deploy, ignoring minAgeBeforeOOR. Both fixed in code (Rule 3 patch) and config (block risky launchpads).",
                        "r12_block_pump_launchpads":  "blockedLaunchpads: [] → [pump.fun, letsbonk.fun] — pump.fun tokens dump fast, low organic, high bundle risk; letsbonk.fun similar profile",
                        "r12_rule3_age_check":  "code fix in index.js getDeterministicCloseRule — Rule 3 now requires (age_minutes >= minAgeBeforeOOR) so bid_ask positions get pullback window before forced close",
@@ -78,7 +80,6 @@
 
                           ],
     "blockedLaunchpads":  [
-                              "pump.fun",
                               "letsbonk.fun"
                           ],
     "minTokenAgeHours":  2,
