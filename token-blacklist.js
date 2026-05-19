@@ -24,14 +24,22 @@ function save(data) {
   fs.writeFileSync(BLACKLIST_FILE, JSON.stringify(data, null, 2));
 }
 
+// ─── Permanent (source-baked) blacklist ────────────────────────
+// Survives container redeploys when data-dir volume is not mounted.
+// Add mints here only for proven rug/loss tokens. Keep small.
+const PERMANENT_BLACKLIST = new Set([
+  "6AVAUKa9uxQpruHZUinFECpXEh1usRVtzQWK8N2wpump", // SCAM-SOL: 2 deploys, -$5.45 (R13)
+]);
+
 // ─── Check ─────────────────────────────────────────────────────
 
 /**
- * Returns true if the mint is on the blacklist.
+ * Returns true if the mint is on the blacklist (permanent or dynamic).
  * Used in screening.js before returning pools to the LLM.
  */
 export function isBlacklisted(mint) {
   if (!mint) return false;
+  if (PERMANENT_BLACKLIST.has(mint)) return true;
   const db = load();
   return !!db[mint];
 }
