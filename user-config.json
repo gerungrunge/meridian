@@ -1,5 +1,7 @@
 {
     "_changelog":  {
+                       "_note_r13":  "2026-05-18 R13 same-token deploy block. SCAM-SOL: 2 deploys to same token within 7 hours, net -$5.45. maxDeploysPerPool24h cek pool address (different bin step pools allowed), repeatDeployCooldown default triggerCount=3 too loose. Tighten: 1 deploy per token within 24h regardless of prior PnL unless ≥3% fee earned (proven winner).",
+                       "r13_token_cooldown":  "repeatDeployCooldownTriggerCount: 3 → 1 — block 2nd same-token deploy within 24h. repeatDeployCooldownMinFeeEarnedPct: 0 → 3.0 — only allow redeploy if prior position earned ≥3% fees (proven). Scope already 'token' so cross-pool same-token covered.",
                        "_note_r12b":  "2026-05-18 R12b drought rollback: 1+ hour zero deploys, ALL candidates were pump.fun. Market regime = pump.fun dominant. R12 full block too aggressive. DUST loss was outlier, not category-wide. LP tracker shows pump.fun tokens (WORLDCUP, Goblin) with 20 LPers + 9%+ ROI = profitable. Re-allow pump.fun, keep letsbonk.fun blocked (less proven). Existing quality filters (top10, bundle, mcap, fees) catch most rugs.",
                        "r12b_unblock_pumpfun":  "blockedLaunchpads: [pump.fun, letsbonk.fun] → [letsbonk.fun] — pump.fun re-allowed; other filters still gate quality",
                        "_note_r12":  "2026-05-13 R12 launchpad block + OOR fix. DUST-SOL (pump.fun token) -$5.83 single loss wiped multiple wins. Mint ended in 'pump' = pump.fun, holders 75 only, mcap dumped 48% in 2h22m. Also caught Rule 3 (pumped-far-above-range) closing bid_ask positions 2min after deploy, ignoring minAgeBeforeOOR. Both fixed in code (Rule 3 patch) and config (block risky launchpads).",
@@ -50,6 +52,11 @@
     "gasReserve":  0.06,
     "positionSizePct":  0.90,
     "maxDeploysPerPool24h":  1,
+    "repeatDeployCooldownEnabled":  true,
+    "repeatDeployCooldownTriggerCount":  1,
+    "repeatDeployCooldownHours":  24,
+    "repeatDeployCooldownScope":  "token",
+    "repeatDeployCooldownMinFeeEarnedPct":  3.0,
     "strategy":  "bid_ask",
     "binsBelow":  90,
     "minBinsBelow":  35,
