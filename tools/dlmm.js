@@ -97,7 +97,7 @@ function getWallet() {
 }
 
 function shouldUseLpAgentRelay() {
-  return !!config.api.lpAgentRelayEnabled;
+  return !!config.api.lpAgentRelayEnabled && !isRelayCircuitOpen();
 }
 
 function shouldUseLpAgentRelayForDeploy() {
@@ -888,6 +888,41 @@ const POSITIONS_CACHE_TTL = 5 * 60_000; // 5 minutes
 let _positionsCache = null;
 let _positionsCacheAt = 0;
 let _positionsInflight = null; // deduplicates concurrent calls
+
+// ─── Relay Circuit Breaker ─────────────────────────────────────
+const RELAY_CIRCUIT_THRESHOLD = 3;
+const RELAY_CIRCUIT_COOLDOWN_MS = 10 * 60 * 1000;
+let _relayConsecutiveFails = 0;
+let _relayCircuitOpenAt = 0;
+
+function isRelayCircuitOpen() {
+  if (!_relayCircuitOpenAt) return false;
+  if (Date.now() - _relayCircuitOpenAt >= RELAY_CIRCUIT_COOLDOWN_MS) {
+    _relayCircuitOpenAt = 0;
+    _relayConsecutiveFails = 0;
+    log("positions", "Relay circuit auto-closed — retrying Agent Meridian");
+    return false;
+  }
+  return true;
+}
+
+function recordRelayFailure(label) {
+  _relayConsecutiveFails += 1;
+  if (_relayConsecutiveFails >= RELAY_CIRCUIT_THRESHOLD && !_relayCircuitOpenAt) {
+    _relayCircuitOpenAt = Date.now();
+    log("positions_warn", `Relay circuit OPEN after ${_relayConsecutiveFails} consecutive failures — skipping relay for ${RELAY_CIRCUIT_COOLDOWN_MS / 60_000} min`);
+  } else if (!_relayCircuitOpenAt) {
+    log("positions_warn", `Agent Meridian relay failed${label ? ` (${label})` : ""}; falling back to Meteora/local path (fail ${_relayConsecutiveFails}/${RELAY_CIRCUIT_THRESHOLD})`);
+  }
+}
+
+function recordRelaySuccess() {
+  if (_relayConsecutiveFails > 0) {
+    log("positions", "Agent Meridian relay recovered — circuit closed");
+  }
+  _relayConsecutiveFails = 0;
+  _relayCircuitOpenAt = 0;
+}
 const LPAGENT_API = "https://api.lpagent.io/open-api/v1";
 
 async function fetchLpAgentOpenPositions(walletAddress) {
@@ -1117,9 +1152,10 @@ export async function getMyPositions({ force = false, silent = false } = {}) {
           request_id: result.requestId || null,
         };
         _positionsCacheAt = Date.now();
+        recordRelaySuccess();
         return _positionsCache;
       } catch (error) {
-        log("positions_warn", `Agent Meridian relay failed; falling back to Meteora/local positions path: ${error.message}`);
+        recordRelayFailure(error?.message?.match(/\d{3}/)?.[0]);
       }
     }
 
@@ -1573,6 +1609,7 @@ export async function closePosition({ position_address, reason }) {
           minutes_in_range: minutesHeld - minutesOOR,
           minutes_held: minutesHeld,
           close_reason: reason || "agent decision",
+          deployed_at: tracked.deployed_at || null,
         });
 
         appendDecision({
@@ -1848,6 +1885,7 @@ export async function closePosition({ position_address, reason }) {
         minutes_in_range: minutesHeld - minutesOOR,
         minutes_held: minutesHeld,
         close_reason: reason || "agent decision",
+        deployed_at: tracked.deployed_at || null,
       });
 
       appendDecision({

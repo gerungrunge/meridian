@@ -123,6 +123,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
     strategy: deployData.strategy || null,
     volatility_at_deploy: deployData.volatility ?? null,
   };
+  const closeReasonLower = String(deploy.close_reason || "").toLowerCase();
 
   entry.deploys.push(deploy);
   entry.total_deploys = entry.deploys.length;
@@ -152,7 +153,6 @@ export function recordPoolDeploy(poolAddress, deployData) {
   // Set cooldown for low yield closes — pool wasn't profitable enough, don't redeploy soon
   // Match any close reason that mentions "low yield" or "fee/TVL ... < min" pattern
   // (e.g. "Trailing TP: Low yield: fee/TVL 0.51% < min 6%", "low yield", "Low yield: fee/TVL ...")
-  const closeReasonLower = String(deploy.close_reason || "").toLowerCase();
   if (closeReasonLower.includes("low yield") || closeReasonLower.includes("fee/tvl")) {
     const cooldownHours = 4;
     const cooldownUntil = setPoolCooldown(entry, cooldownHours, "low yield");
@@ -176,8 +176,21 @@ export function recordPoolDeploy(poolAddress, deployData) {
     }
   }
 
+  // Catastrophic loss cooldown — block pool after big loss to prevent trend-chasing
+  const isStopLoss = closeReasonLower.includes("stop loss");
+  const isCatastrophicLoss = (deploy.pnl_pct ?? 0) < -10 || isStopLoss;
+  if (isCatastrophicLoss) {
+    const cooldownHours = 4;
+    const reason = isStopLoss ? "stop loss triggered" : `catastrophic loss ${deploy.pnl_pct}%`;
+    const poolCooldownUntil = setPoolCooldown(entry, cooldownHours, reason);
+    if (entry.base_mint) {
+      const mintCooldownUntil = setBaseMintCooldown(db, entry.base_mint, cooldownHours, reason);
+      log("pool-memory", `Catastrophic loss cooldown set for ${entry.name} until ${poolCooldownUntil} (${reason})`);
+      log("pool-memory", `Base mint cooldown set for ${entry.base_mint.slice(0, 8)} until ${mintCooldownUntil} (${reason})`);
+    }
+  }
+
   save(db);
-  log("pool-memory", `Recorded deploy for ${entry.name} (${poolAddress.slice(0, 8)}): PnL ${deploy.pnl_pct}%`);
 }
 
 export function isPoolOnCooldown(poolAddress) {

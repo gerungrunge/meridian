@@ -640,6 +640,15 @@ async function runSafetyChecks(name, args) {
         };
       }
 
+      // Reject pools with volatility below minimum floor
+      const minVol = config.screening.minVolatility;
+      if (args.volatility != null && Number.isFinite(args.volatility) && args.volatility < minVol) {
+        return {
+          pass: false,
+          reason: `volatility ${args.volatility} is below minimum floor ${minVol}.`,
+        };
+      }
+
       const deployAmountY = Number(args.amount_y ?? args.amount_sol ?? 0);
       const deployAmountX = Number(args.amount_x ?? 0);
       if (Number.isFinite(deployAmountX) && deployAmountX > 0) {
