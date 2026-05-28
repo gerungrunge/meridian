@@ -6,7 +6,6 @@ Autonomous DLMM liquidity provider agent for Meteora pools on Solana.
 
 ## Architecture Overview
 
-
 ```
 index.js            Main entry: REPL + cron orchestration + Telegram bot polling
 agent.js            ReAct loop (OpenRouter/OpenAI-compatible): LLM → tool call → repeat
@@ -18,7 +17,7 @@ pool-memory.js      Per-pool deploy history + snapshots (pool-memory.json)
 strategy-library.js Saved LP strategies (strategy-library.json)
 briefing.js         Daily Telegram briefing (HTML)
 telegram.js         Telegram bot: polling, notifications (deploy/close/swap/OOR)
-hivemind.js         Agent Meridian HiveMind sync
+hive-mind.js        Optional collective intelligence server sync
 smart-wallets.js    KOL/alpha wallet tracker (smart-wallets.json)
 token-blacklist.js  Permanent token blacklist (token-blacklist.json)
 logger.js           Daily-rotating log files + action audit trail
@@ -32,8 +31,6 @@ tools/
   token.js          Token info/holders/narrative (Jupiter API)
   study.js          Top LPer study via LPAgent API
 ```
-
-
 
 ---
 
@@ -112,12 +109,12 @@ Sets defined in `agent.js:6-7`. If you add a tool, also add it to the relevant s
 
 Before `deploy_position` executes:
 - `bin_step` must be within `[minBinStep, maxBinStep]`
-- `volatility` must be a positive finite number when provided; fresh pool detail with volatility 0/null is rejected
-- Total range must be at least `max(35, minBinsBelow)` bins; 1-bin/tiny deploys are refused
 - Position count must be below `maxPositions` (force-fresh scan, no cache)
 - No duplicate pool allowed (same pool_address)
 - No duplicate base token allowed (same base_mint in another pool)
-- `amount_x > 0` is rejected. Deploys are single-side SOL only (`amount_y` / `amount_sol`)
+- Deploy amount must include positive SOL (`amount_y` or `amount_sol`)
+- Range width must be at least the configured safe bins floor (`minBinsBelow`, never below 35)
+- Single-side SOL deploys must keep `bins_above=0`
 - SOL balance must cover `amount_y + gasReserve`
 - `blockedLaunchpads` enforced in `getTopCandidates()` before LLM sees candidates
 
@@ -125,17 +122,15 @@ Before `deploy_position` executes:
 
 ## bins_below Calculation (SCREENER)
 
-Linear formula based on positive pool volatility (set in screener prompt, `index.js`):
-
+Linear formula based on pool volatility (set in screener prompt, `index.js`). The lower/upper bounds are configurable, with a hard safety floor of 35 bins:
 
 ```
-bins_below = round(minBinsBelow + (volatility / 5) * (maxBinsBelow - minBinsBelow)), clamped to [minBinsBelow, maxBinsBelow]
+bins_below = round(minBinsBelow + (volatility / 5) * (maxBinsBelow - minBinsBelow))
+clamped to [minBinsBelow, maxBinsBelow]
 ```
 
-
-
-- Default clamp is `[35, 69]`
-- `volatility <= 0`, null, or non-finite → skip/refuse deploy
+- Volatility must be finite and > 0; zero/missing volatility is treated as an unusable feed
+- Low valid volatility → minBinsBelow
 - High volatility (5+) → maxBinsBelow
 - Any value in between is valid (continuous, not tiered)
 
@@ -175,14 +170,12 @@ Jupiter audit API: `botHoldersPercentage` (5–25% is normal for legitimate toke
 ## Base Fee Calculation (dlmm.js)
 
 Read from pool object at deploy time:
-
 ```js
 const baseFactor = pool.lbPair.parameters?.baseFactor ?? 0;
 const actualBaseFee = baseFactor > 0
   ? parseFloat((baseFactor * actualBinStep / 1e6 * 100).toFixed(4))
   : null;
 ```
-
 
 ---
 
@@ -206,9 +199,11 @@ const actualBaseFee = baseFactor > 0
 
 ---
 
-## HiveMind
+## Hive Mind (hive-mind.js)
 
-Agent Meridian HiveMind sync is handled by `hivemind.js`. It uses built-in Agent Meridian defaults unless overridden by config or env.
+Optional feature. Enabled by setting `HIVE_MIND_URL` and `HIVE_MIND_API_KEY` in `.env`.
+Syncs lessons/deploys to a shared server, queries consensus patterns.
+Not required for normal operation.
 
 ---
 

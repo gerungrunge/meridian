@@ -8,9 +8,8 @@
 import fs from "fs";
 import { log } from "./logger.js";
 import { config } from "./config.js";
-import { dataPath } from "./data-dir.js";
 
-const POOL_MEMORY_FILE = dataPath("pool-memory.json");
+const POOL_MEMORY_FILE = "./pool-memory.json";
 const MAX_NOTE_LENGTH = 280;
 
 function sanitizeStoredNote(text, maxLen = MAX_NOTE_LENGTH) {
@@ -48,6 +47,16 @@ function isAdjustedWinRateExcludedReason(reason) {
     text.includes("pumped far above range") ||
     text === "oor" ||
     text.includes("oor");
+}
+
+function isFeeGeneratingDeploy(deploy) {
+  const minFeeEarnedPct = Number(config.management.repeatDeployCooldownMinFeeEarnedPct ?? 0);
+  const feeEarnedPct = Number(deploy.fee_earned_pct ?? 0);
+  const feesUsd = Number(deploy.fees_earned_usd ?? 0);
+  const feesSol = Number(deploy.fees_earned_sol ?? 0);
+  const hasFees = (Number.isFinite(feesUsd) && feesUsd > 0) || (Number.isFinite(feesSol) && feesSol > 0);
+  if (!hasFees) return false;
+  return Number.isFinite(feeEarnedPct) && feeEarnedPct >= minFeeEarnedPct;
 }
 
 function setPoolCooldown(entry, hours, reason) {
@@ -117,13 +126,15 @@ export function recordPoolDeploy(poolAddress, deployData) {
     closed_at: deployData.closed_at || new Date().toISOString(),
     pnl_pct: deployData.pnl_pct ?? null,
     pnl_usd: deployData.pnl_usd ?? null,
+    fees_earned_usd: deployData.fees_earned_usd ?? null,
+    fees_earned_sol: deployData.fees_earned_sol ?? null,
+    fee_earned_pct: deployData.fee_earned_pct ?? null,
     range_efficiency: deployData.range_efficiency ?? null,
     minutes_held: deployData.minutes_held ?? null,
     close_reason: deployData.close_reason || null,
     strategy: deployData.strategy || null,
     volatility_at_deploy: deployData.volatility ?? null,
   };
-  const closeReasonLower = String(deploy.close_reason || "").toLowerCase();
 
   entry.deploys.push(deploy);
   entry.total_deploys = entry.deploys.length;
@@ -151,9 +162,7 @@ export function recordPoolDeploy(poolAddress, deployData) {
   }
 
   // Set cooldown for low yield closes — pool wasn't profitable enough, don't redeploy soon
-  // Match any close reason that mentions "low yield" or "fee/TVL ... < min" pattern
-  // (e.g. "Trailing TP: Low yield: fee/TVL 0.51% < min 6%", "low yield", "Low yield: fee/TVL ...")
-  if (closeReasonLower.includes("low yield") || closeReasonLower.includes("fee/tvl")) {
+  if (deploy.close_reason === "low yield") {
     const cooldownHours = 4;
     const cooldownUntil = setPoolCooldown(entry, cooldownHours, "low yield");
     log("pool-memory", `Cooldown set for ${entry.name} until ${cooldownUntil} (low yield close)`);
@@ -176,21 +185,34 @@ export function recordPoolDeploy(poolAddress, deployData) {
     }
   }
 
-  // Catastrophic loss cooldown — block pool after big loss to prevent trend-chasing
-  const isStopLoss = closeReasonLower.includes("stop loss");
-  const isCatastrophicLoss = (deploy.pnl_pct ?? 0) < -10 || isStopLoss;
-  if (isCatastrophicLoss) {
-    const cooldownHours = 4;
-    const reason = isStopLoss ? "stop loss triggered" : `catastrophic loss ${deploy.pnl_pct}%`;
-    const poolCooldownUntil = setPoolCooldown(entry, cooldownHours, reason);
-    if (entry.base_mint) {
-      const mintCooldownUntil = setBaseMintCooldown(db, entry.base_mint, cooldownHours, reason);
-      log("pool-memory", `Catastrophic loss cooldown set for ${entry.name} until ${poolCooldownUntil} (${reason})`);
-      log("pool-memory", `Base mint cooldown set for ${entry.base_mint.slice(0, 8)} until ${mintCooldownUntil} (${reason})`);
+  if (config.management.repeatDeployCooldownEnabled) {
+    const triggerCount = Math.max(1, Number(config.management.repeatDeployCooldownTriggerCount ?? 3));
+    const cooldownHours = Math.max(0, Number(config.management.repeatDeployCooldownHours ?? 12));
+    const rawScope = String(config.management.repeatDeployCooldownScope || "token").toLowerCase();
+    const scope = ["pool", "token", "both"].includes(rawScope) ? rawScope : "token";
+    const recentRepeatDeploys = entry.deploys.slice(-triggerCount);
+    const repeatedFeeGeneratingDeploys =
+      cooldownHours > 0 &&
+      recentRepeatDeploys.length >= triggerCount &&
+      recentRepeatDeploys.every((d) => d.pnl_pct != null && isFeeGeneratingDeploy(d));
+
+    if (repeatedFeeGeneratingDeploys) {
+      const reason = `repeat fee-generating deploys (${triggerCount}x)`;
+      if (scope === "pool" || scope === "both" || !entry.base_mint) {
+        const poolCooldownUntil = setPoolCooldown(entry, cooldownHours, reason);
+        log("pool-memory", `Cooldown set for ${entry.name} until ${poolCooldownUntil} (${reason})`);
+      }
+      if ((scope === "token" || scope === "both") && entry.base_mint) {
+        const mintCooldownUntil = setBaseMintCooldown(db, entry.base_mint, cooldownHours, reason);
+        if (mintCooldownUntil) {
+          log("pool-memory", `Base mint cooldown set for ${entry.base_mint.slice(0, 8)} until ${mintCooldownUntil} (${reason})`);
+        }
+      }
     }
   }
 
   save(db);
+  log("pool-memory", `Recorded deploy for ${entry.name} (${poolAddress.slice(0, 8)}): PnL ${deploy.pnl_pct}%`);
 }
 
 export function isPoolOnCooldown(poolAddress) {
@@ -199,24 +221,6 @@ export function isPoolOnCooldown(poolAddress) {
   const entry = db[poolAddress];
   if (!entry?.cooldown_until) return false;
   return new Date(entry.cooldown_until) > new Date();
-}
-
-/**
- * Count deploys on a pool that opened or closed within the last `withinHours`.
- * Used to cap trend-chasing — same pool deployed repeatedly within a short window.
- */
-export function countRecentDeploys(poolAddress, withinHours = 24) {
-  if (!poolAddress) return 0;
-  const db = load();
-  const entry = db[poolAddress];
-  if (!entry?.deploys?.length) return 0;
-  const cutoff = Date.now() - withinHours * 60 * 60 * 1000;
-  return entry.deploys.filter((d) => {
-    const ts = d.deployed_at || d.closed_at;
-    if (!ts) return false;
-    const t = new Date(ts).getTime();
-    return Number.isFinite(t) && t >= cutoff;
-  }).length;
 }
 
 export function isBaseMintOnCooldown(baseMint) {

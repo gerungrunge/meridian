@@ -14,7 +14,9 @@
   "positionSizePct": 0.35,
 
   "strategy": "bid_ask",
-  "binsBelow": 69,
+  "minBinsBelow": 35,
+  "maxBinsBelow": 69,
+  "defaultBinsBelow": 69,
 
   "timeframe": "5m",
   "category": "trending",
@@ -43,6 +45,7 @@
   "minTokenAgeHours": null,
   "maxTokenAgeHours": null,
   "athFilterPct": null,
+  "screeningSource": "meteora",
 
   "minClaimAmount": 5,
   "autoSwapAfterClaim": false,
@@ -50,6 +53,11 @@
   "outOfRangeWaitMinutes": 30,
   "oorCooldownTriggerCount": 3,
   "oorCooldownHours": 12,
+  "repeatDeployCooldownEnabled": true,
+  "repeatDeployCooldownTriggerCount": 3,
+  "repeatDeployCooldownHours": 12,
+  "repeatDeployCooldownScope": "token",
+  "repeatDeployCooldownMinFeeEarnedPct": 0,
   "minVolumeToRebalance": 1000,
   "stopLossPct": -50,
   "emergencyPriceDropPct": -50,

@@ -18,7 +18,7 @@ Pools are pre-filtered for safety:
 - Both tokens organic score >= 60
 
 Returns condensed pool data: address, name, tokens, bin_step, fee_pct,
-active_tvl, fee_window, volume_window, fee_tvl_ratio, volatility, organic_score,
+active_tvl, fee_window, volume_window, fee_tvl_ratio, volatility from max(timeframe, 30m), organic_score,
 holders, mcap, active_positions, price_change_pct, warning count.
 
 Use this as the primary tool for finding new LP opportunities.`,
@@ -48,11 +48,14 @@ Use this as the primary tool for finding new LP opportunities.`,
     type: "function",
     function: {
       name: "get_top_candidates",
-      description: `Get the top pre-scored pool candidates ready for deployment.
+      description: `Get the top pre-scored pool candidates for deployment review.
 All filtering, scoring, and rule-checking is done in code — no analysis needed.
 Returns the top N eligible pools ranked by score (fee/TVL, organic, stability, volume).
-Each pool includes a score (0-100) and has already passed all hard disqualifiers.
-Use this instead of discover_pools for screening cycles.`,
+Each pool includes a score (0-100) and has already passed hard disqualifiers, but this does not mean deployment is mandatory.
+If only one candidate is returned, deploy only when it is genuinely high conviction; otherwise skip the cycle.
+Use this instead of discover_pools for screening cycles. The active screening source is controlled by screeningSource:
+- meteora: legacy Meteora pool-discovery flow
+- gmgn: GMGN trending/security/holders/price-action first, then Meteora DLMM pool match.`,
       parameters: {
         type: "object",
         properties: {
@@ -132,16 +135,15 @@ PRIORITY ORDER for strategy and bins:
 
 HARD RULES:
 - Never use 'curve'.
-- Bin Step: Only deploy in pools with bin_step within the configured range (see config minBinStep/maxBinStep).
-- Volatility must be positive. If volatility is 0, null, or missing, do not deploy.
-- Range must cover at least 35 total bins. Never deploy 1-bin/tiny ranges.
+- Bin Step: Only deploy in pools with bin_step between 80 and 125.
+- Range: Never deploy a tiny range. Total bins must be at least the configured minimum, with a hard floor of 35 bins.
 - For single-side SOL deploys (amount_y only, amount_x=0), do not request upside exposure:
   use bins_below only, keep bins_above=0, and the upper bin will be pinned to the current active bin.
 
 Guidelines (only when user hasn't specified):
 - Strategy: use the active strategy's lp_strategy field (bid_ask or spot)
-- Bins: choose from configured minBinsBelow/maxBinsBelow based on positive volatility. The hard lower floor is 35 bins.
-- Deposit: single-sided SOL only: set amount_y/amount_sol, keep amount_x=0.
+- Bins: choose 35–69 for standard volatility; up to 350 for wide-range strategies. Max 1400 total.
+- Deposit: single-sided SOL only. Use amount_y/amount_sol and keep amount_x=0.
 
 WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
       parameters: {
@@ -157,7 +159,7 @@ WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
           },
           amount_x: {
             type: "number",
-            description: "Unsupported for this agent. Keep at 0; deploys are single-side SOL via amount_y."
+            description: "Unsupported for this agent. Keep 0; deploys must be single-side SOL via amount_y/amount_sol."
           },
           amount_sol: {
             type: "number",
@@ -188,7 +190,7 @@ WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
           base_mint: { type: "string", description: "Base token mint address — used to prevent duplicate token exposure across pools" },
           bin_step: { type: "number", description: "Pool bin step (from discover_pools)" },
           base_fee: { type: "number", description: "Pool base fee percentage (from discover_pools)" },
-          volatility: { type: "number", description: "Pool volatility at deploy time" },
+          volatility: { type: "number", description: "Pool volatility at deploy time, sourced from max(screening timeframe, 30m)" },
           fee_tvl_ratio: { type: "number", description: "fee/TVL ratio at deploy time" },
           organic_score: { type: "number", description: "Base token organic score at deploy time" },
           initial_value_usd: { type: "number", description: "Estimated USD value being deployed" }
@@ -367,41 +369,8 @@ WARNING: This executes a real on-chain transaction.`,
             type: "number",
             description: "Amount of input token to swap (in human-readable units, not lamports)"
           },
-          slippage_bps: {
-            type: "number",
-            description: "Optional slippage tolerance in basis points (50 = 0.5%, 500 = 5%). Defaults to Jupiter's auto-slippage."
-          },
         },
         required: ["input_mint", "output_mint", "amount"]
-      }
-    }
-  },
-
-  {
-    type: "function",
-    function: {
-      name: "sweep_dust",
-      description: `Sweep all SPL token dust in the wallet to SOL.
-Walks every token, skips SOL/USDC/USDT and any mint currently held in an active LP position,
-then swaps each remaining token (above min_usd) to SOL with generous slippage.
-Per-token failures are tolerated — one failed token does not block the others.
-
-Use this when you notice dust accumulating in the wallet (e.g. previous swap attempts
-failed silently due to thin liquidity, or tokens were left below the auto-swap threshold).
-Already runs automatically after close_position and claim_fees when dustSweepEnabled is true.`,
-      parameters: {
-        type: "object",
-        properties: {
-          min_usd: {
-            type: "number",
-            description: "Skip tokens below this USD value (default from config.dustSweepMinUsd, typically 0.05)"
-          },
-          slippage_bps: {
-            type: "number",
-            description: "Slippage tolerance in basis points (default from config.dustSweepSlippageBps, typically 500 = 5%)"
-          },
-        },
-        required: []
       }
     }
   },
@@ -414,15 +383,18 @@ Already runs automatically after close_position and claim_fees when dustSweepEna
     function: {
       name: "update_config",
       description: `Update any of your operating parameters at runtime.
-Changes persist to user-config.json and take effect immediately — no restart needed.
+Non-GMGN changes persist to user-config.json; GMGN tuning persists to gmgn-config.json. Changes take effect immediately — no restart needed.
 
 VALID KEYS (use EXACTLY these key names, nothing else):
-Screening: minFeeActiveTvlRatio, minTvl, maxTvl, minVolume, minOrganic, minQuoteOrganic, minHolders, minMcap, maxMcap, minBinStep, maxBinStep, timeframe, category, minTokenFeesSol, excludeHighSupplyConcentration, allowedLaunchpads, blockedLaunchpads
-Management: minClaimAmount, outOfRangeBinsToClose, outOfRangeWaitMinutes, minVolumeToRebalance, stopLossPct, takeProfitPct, minSolToOpen, deployAmountSol, gasReserve, positionSizePct
+Screening: screeningSource, minFeeActiveTvlRatio, minTvl, maxTvl, minVolume, minOrganic, minQuoteOrganic, minHolders, minMcap, maxMcap, minBinStep, maxBinStep, timeframe, category, minTokenFeesSol, excludeHighSupplyConcentration, useDiscordSignals, discordSignalMode, avoidPvpSymbols, blockPvpSymbols, maxBundlePct, maxBotHoldersPct, maxTop10Pct, allowedLaunchpads, blockedLaunchpads, minTokenAgeHours, maxTokenAgeHours, athFilterPct
+GMGN (persisted to gmgn-config.json): gmgnApiKey, gmgnBaseUrl, gmgnInterval, gmgnOrderBy, gmgnDirection, gmgnLimit, gmgnEnrichLimit, gmgnRequestDelayMs, gmgnMaxRetries, gmgnHoldersLimit, gmgnKlineResolution, gmgnKlineLookbackMinutes, gmgnFilters, gmgnPlatforms, gmgnMinMcap, gmgnMaxMcap, gmgnMinVolume, gmgnMinHolders, gmgnMinTokenAgeHours, gmgnMaxTokenAgeHours, gmgnAthFilterPct, gmgnMaxTop10HolderRate, gmgnMaxBundlerRate, gmgnMaxRatTraderRate, gmgnMaxFreshWalletRate, gmgnMaxDevTeamHoldRate, gmgnMaxBotDegenRate, gmgnMaxSniperCount, gmgnMaxSniperHoldRate, gmgnPreferredKolNames, gmgnPreferredKolMinHoldPct, gmgnDumpKolNames, gmgnDumpKolMinHoldPct, gmgnRequireKol, gmgnMinKolCount, gmgnMinSmartDegenCount, gmgnMinTotalFeeSol, gmgnIndicatorFilter, gmgnIndicatorInterval, gmgnRequireBullishSupertrend, gmgnRejectAlreadyAtBottom, gmgnRequireAboveSupertrend, gmgnMinRsi, gmgnMaxRsi, gmgnRequireBbPosition
+Management: minClaimAmount, autoSwapAfterClaim, outOfRangeBinsToClose, outOfRangeWaitMinutes, oorCooldownTriggerCount, oorCooldownHours, repeatDeployCooldownEnabled, repeatDeployCooldownTriggerCount, repeatDeployCooldownHours, repeatDeployCooldownScope, repeatDeployCooldownMinFeeEarnedPct, minVolumeToRebalance, stopLossPct, takeProfitPct, takeProfitFeePct, trailingTakeProfit, trailingTriggerPct, trailingDropPct, pnlSanityMaxDiffPct, solMode, minSolToOpen, deployAmountSol, gasReserve, positionSizePct, minAgeBeforeYieldCheck
 Risk: maxPositions, maxDeployAmount
-Schedule: managementIntervalMin, screeningIntervalMin
-Models: managementModel, screeningModel, generalModel
-Strategy: minBinsBelow, maxBinsBelow, defaultBinsBelow (legacy binsBelow maps to maxBinsBelow)
+Schedule: managementIntervalMin, screeningIntervalMin, healthCheckIntervalMin
+Models: managementModel, screeningModel, generalModel, temperature, maxTokens, maxSteps
+Strategy: strategy, binsBelow, minBinsBelow, maxBinsBelow, defaultBinsBelow
+Hive/API: hiveMindUrl, hiveMindApiKey, agentId, hiveMindPullMode, publicApiKey, agentMeridianApiUrl, lpAgentRelayEnabled
+Indicators: chartIndicatorsEnabled, indicatorEntryPreset, indicatorExitPreset, rsiLength, indicatorIntervals, indicatorCandles, rsiOversold, rsiOverbought, requireAllIntervals
 
 Reason is optional but helpful — logged as a lesson when provided.`,
       parameters: {
@@ -571,7 +543,7 @@ is_pool=true means it's a liquidity pool address, not a real holder — filter t
 
 Also returns global_fees_sol — total priority/jito tips paid by ALL traders on this token (NOT Meteora LP fees).
 This is a key signal: low global_fees_sol means transactions are bundled or the token is a scam.
-HARD GATE: if global_fees_sol < config.screening.minTokenFeesSol, do NOT deploy.
+HARD GATE: if global_fees_sol < config.screening.minTokenFeesSol (default 30), do NOT deploy.
 
 NOTE: Requires mint address. If you only have a symbol/name, call get_token_info first to resolve the mint.`,
       parameters: {

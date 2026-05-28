@@ -8,6 +8,7 @@ import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
 import { getWalletBalances } from "./tools/wallet.js";
 import { getTopCandidates } from "./tools/screening.js";
+import { formatGmgnCandidateForPrompt } from "./tools/gmgn.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
@@ -25,7 +26,7 @@ import {
   createLiveMessage,
 } from "./telegram.js";
 import { generateBriefing } from "./briefing.js";
-import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop } from "./state.js";
+import { getLastBriefingDate, setLastBriefingDate, getTrackedPosition, getTrackedPositions, setPositionInstruction, updatePnlAndCheckExits, queuePeakConfirmation, resolvePendingPeak, queueTrailingDropConfirmation, resolvePendingTrailingDrop } from "./state.js";
 import { getActiveStrategy } from "./strategy-library.js";
 import { recordPositionSnapshot, recallForPool, addPoolNote } from "./pool-memory.js";
 import { checkSmartWalletsOnPool } from "./smart-wallets.js";
@@ -35,8 +36,9 @@ import { getWeightsSummary } from "./signal-weights.js";
 import { bootstrapHiveMind, ensureAgentId, getHiveMindPullMode, isHiveMindEnabled, pullHiveMindLessons, pullHiveMindPresets, registerHiveMindAgent, startHiveMindBackgroundSync } from "./hivemind.js";
 import { appendDecision } from "./decision-log.js";
 
-const isMain = process.argv[1]
-  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+const entrypointPath = process.env.pm_exec_path || process.argv[1];
+const isMain = entrypointPath
+  ? path.resolve(entrypointPath) === fileURLToPath(import.meta.url)
   : false;
 
 if (isMain) {
@@ -436,12 +438,18 @@ export async function runScreeningCycle({ silent = false } = {}) {
     const activeStrategy = getActiveStrategy();
     const strategyBlock = activeStrategy
       ? `ACTIVE STRATEGY: ${activeStrategy.name} — LP: ${activeStrategy.lp_strategy} | bins_above: ${activeStrategy.range?.bins_above ?? 0} (FIXED — never change) | deposit: ${activeStrategy.entry?.single_side === "sol" ? "SOL only (amount_y, amount_x=0)" : "dual-sided"} | best for: ${activeStrategy.best_for}`
-      : `No active strategy — use default bid_ask, bins_above: 0, SOL only.`;
+      : `No active strategy — use strategy=${config.strategy.strategy}, bins_above=0, SOL only.`;
 
     // Fetch top candidates, then recon each sequentially with a small delay to avoid 429s
-    const topCandidates = await getTopCandidates({ limit: 10 }).catch(() => null);
+    const topCandidates = await getTopCandidates({ limit: 10 }).catch((e) => ({ _error: e.message }));
+    if (topCandidates?._error) {
+      screenReport = `Screening failed: ${topCandidates._error}`;
+      return screenReport;
+    }
     const candidates = (topCandidates?.candidates || topCandidates?.pools || []).slice(0, 10);
     const earlyFilteredExamples = topCandidates?.filtered_examples || [];
+    const gmgnStageCounts = topCandidates?.stage_counts ?? null;
+    const gmgnAllFiltered = topCandidates?.all_filtered ?? [];
 
     const allCandidates = [];
     for (const pool of candidates) {
@@ -462,8 +470,10 @@ export async function runScreeningCycle({ silent = false } = {}) {
     }
 
     // Hard filters after token recon — block launchpads and excessive Jupiter bot holders
+    // Skipped for GMGN: platforms already filtered upstream; bundler/bot data from GMGN pipeline
     const filteredOut = [];
     const passing = allCandidates.filter(({ pool, ti }) => {
+      if (pool.gmgn) return true;
       const launchpad = ti?.launchpad ?? null;
       if (launchpad && config.screening.allowedLaunchpads?.length > 0 && !config.screening.allowedLaunchpads.includes(launchpad)) {
         log("screening", `Skipping ${pool.name} — launchpad ${launchpad} not in allow-list`);
@@ -487,26 +497,36 @@ export async function runScreeningCycle({ silent = false } = {}) {
 
     if (passing.length === 0) {
       const combined = filteredOut.length > 0 ? filteredOut : earlyFilteredExamples;
-      const combinedExamples = combined.slice(0, 3)
+      const combinedExamples = combined.slice(0, 5)
         .map((entry) => `- ${entry.name}: ${entry.reason}`)
         .join("\n");
-      screenReport = combinedExamples
-        ? `No candidates available.\nFiltered examples:\n${combinedExamples}`
-        : `No candidates available (all filtered by launchpad / holder-quality rules).`;
+      const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnAllFiltered, { fromStage: 2 });
+      const thresholds = `Thresholds: tvl>$${config.screening.minTvl} | vol>$${config.screening.minVolume} | organic>${config.screening.minOrganic}% | holders>${config.screening.minHolders} | fee/tvl>${config.screening.minFeeActiveTvlRatio}%`;
+      screenReport = funnelBlock
+        ? `No candidates available.\n\n${funnelBlock}`
+        : combinedExamples
+          ? `No candidates available.\nFiltered examples:\n${combinedExamples}`
+          : `No candidates available (all filtered).\n${thresholds}`;
       appendDecision({
         type: "no_deploy",
         actor: "SCREENER",
         summary: "No candidates available",
-        reason: combinedExamples || "All candidates filtered before deploy",
+        reason: funnelBlock || combinedExamples || "All candidates filtered before deploy",
         rejected: combined.slice(0, 5).map((entry) => `${entry.name}: ${entry.reason}`),
       });
       return screenReport;
+    }
+
+    if (passing.length <= 1 && gmgnStageCounts) {
+      const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnAllFiltered, { fromStage: 2 });
+      if (funnelBlock) log("screening", `GMGN funnel (sparse):\n${funnelBlock}`);
     }
 
     if (passing.length === 1) {
       const skipReason = getLoneCandidateSkipReason(passing[0]);
       if (skipReason) {
         const candidateName = passing[0].pool?.name || "unknown";
+        const funnelBlock = buildGmgnFunnelReport(gmgnStageCounts, gmgnAllFiltered, { fromStage: 2 });
         screenReport = [
           "⛔ NO DEPLOY",
           "",
@@ -520,7 +540,8 @@ export async function runScreeningCycle({ silent = false } = {}) {
           "",
           "REJECTED",
           `- ${candidateName}: ${skipReason}`,
-        ].join("\n");
+          funnelBlock ? `\n─────────────\n${funnelBlock}` : null,
+        ].filter(Boolean).join("\n");
         appendDecision({
           type: "no_deploy",
           actor: "SCREENER",
@@ -570,25 +591,43 @@ export async function runScreeningCycle({ silent = false } = {}) {
       const pvpLine = pool.is_pvp
         ? `  pvp: HIGH — rival ${pool.pvp_rival_name || pool.pvp_symbol} (${pool.pvp_rival_mint?.slice(0, 8)}...) has pool ${pool.pvp_rival_pool?.slice(0, 8)}..., tvl=$${pool.pvp_rival_tvl}, holders=${pool.pvp_rival_holders}, fees=${pool.pvp_rival_fees}SOL`
         : null;
-
-      const block = [
-        `POOL: ${pool.name} (${pool.pool})`,
-        `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
-        `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
-        pvpLine,
-        okxParts ? `  okx: ${okxParts}` : okxUnavailable ? `  okx: unavailable` : null,
-        okxTags  ? `  tags: ${okxTags}` : null,
-        pool.price_vs_ath_pct != null ? `  ath: price_vs_ath=${pool.price_vs_ath_pct}%${pool.top_cluster_trend ? `, top_cluster=${pool.top_cluster_trend}` : ""}` : null,
-        `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
-        activeBin != null ? `  active_bin: ${activeBin}` : null,
-        priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
-        n?.narrative ? `  narrative_untrusted: ${sanitizeUntrustedPromptText(n.narrative, 500)}` : `  narrative_untrusted: none`,
-        mem ? `  memory_untrusted: ${sanitizeUntrustedPromptText(mem, 500)}` : null,
-      ].filter(Boolean).join("\n");
+      let block;
+      if (pool.gmgn) {
+        block = [
+          `POOL: ${pool.name} (${pool.pool})`,
+          formatGmgnCandidateForPrompt(pool),
+          pvpLine,
+          `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
+          activeBin != null ? `  active_bin: ${activeBin}` : null,
+          n?.narrative ? `  narrative_untrusted: ${sanitizeUntrustedPromptText(n.narrative, 500)}` : `  narrative_untrusted: none`,
+          mem ? `  memory_untrusted: ${sanitizeUntrustedPromptText(mem, 500)}` : null,
+        ].filter(Boolean).join("\n");
+      } else {
+        const gmgnPriceLine = pool.gmgn_price_action
+          ? `  gmgn_price: rsi2=${pool.gmgn_price_action.rsi2 ?? "?"}, supertrend=${pool.gmgn_price_action.supertrend?.direction || "?"}, price_vs_ath=${pool.gmgn_price_action.priceVsAthPct ?? "?"}%, 1h_change=${pool.gmgn_price_action.priceChangePct ?? "?"}%, max_vol_candle=${pool.gmgn_price_action.maxVolumeShare ?? "?"}%`
+          : null;
+        block = [
+          `POOL: ${pool.name} (${pool.pool})`,
+          `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility_${pool.volatility_timeframe || "30m"}=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
+          `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
+          gmgnPriceLine,
+          pvpLine,
+          okxParts ? `  okx: ${okxParts}` : okxUnavailable ? `  okx: unavailable` : null,
+          okxTags  ? `  tags: ${okxTags}` : null,
+          pool.price_vs_ath_pct != null ? `  ath: price_vs_ath=${pool.price_vs_ath_pct}%${pool.top_cluster_trend ? `, top_cluster=${pool.top_cluster_trend}` : ""}` : null,
+          `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
+          activeBin != null ? `  active_bin: ${activeBin}` : null,
+          priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
+          n?.narrative ? `  narrative_untrusted: ${sanitizeUntrustedPromptText(n.narrative, 500)}` : `  narrative_untrusted: none`,
+          mem ? `  memory_untrusted: ${sanitizeUntrustedPromptText(mem, 500)}` : null,
+        ].filter(Boolean).join("\n");
+      }
 
       // Stage signals for Darwinian weighting — captured before LLM decides
       if (config.darwin?.enabled) {
+        const baseMint = pool.base?.mint || pool.base_mint || ti?.mint || null;
         stageSignals(pool.pool, {
+          base_mint:             baseMint,
           organic_score:         pool.organic_score         ?? null,
           fee_tvl_ratio:         pool.fee_active_tvl_ratio  ?? null,
           volume:                pool.volume_window         ?? null,
@@ -616,12 +655,13 @@ PRE-LOADED CANDIDATES (${passing.length} pools):
 ${candidateBlocks.join("\n\n")}
 
 STEPS:
-1. Decide if any candidate is actually worth deploying. One surviving candidate is not automatically good enough.
-2. Pick the best candidate based on narrative quality, smart wallets, and pool metrics.
-3. Call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
-   bins_below = round(${config.strategy.minBinsBelow} + (volatility/5)*(${config.strategy.maxBinsBelow - config.strategy.minBinsBelow})) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}].
-   For single-side SOL deploys, do not invent upside:
-   set amount_y only, keep amount_x = 0, keep bins_above = 0, and let the upper bin stay at the active bin.
+1. Decide whether any candidate is worth deploying. A single remaining candidate is not automatically good enough.
+2. Pick the best candidate only if it has real conviction from narrative quality, smart wallets, and pool metrics. If the list has only one pool and it lacks narrative or smart-wallet confirmation, skip the cycle.
+3. If a pool qualifies, call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
+   strategy = ${config.strategy.strategy} (always use this, never change it).
+   bins_below = round(${config.strategy.minBinsBelow} + (candidate volatility/5)*${config.strategy.maxBinsBelow - config.strategy.minBinsBelow}) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}].
+   pass deploy_position.volatility = the candidate volatility value.
+   bins_above = 0. Single-side SOL only: set amount_y, keep amount_x = 0.
 4. Report in this exact format (no tables, no extra sections):
    🚀 DEPLOYED
 
@@ -690,7 +730,8 @@ IMPORTANT:
           await liveMessage?.toolFinish(name, result, success);
         },
       });
-    screenReport = content;
+    const funnelAppend = buildGmgnFunnelReport(gmgnStageCounts, gmgnAllFiltered, { fromStage: 2 });
+    screenReport = funnelAppend ? `${content}\n\n─────────────\n${funnelAppend}` : content;
     if (/⛔\s*NO DEPLOY/i.test(content)) {
       appendDecision({
         type: "no_deploy",
@@ -763,6 +804,7 @@ Summarize the current portfolio health, total fees earned, and performance of al
   let _pnlPollBusy = false;
   const pnlPollInterval = setInterval(async () => {
     if (_managementBusy || _screeningBusy || _pnlPollBusy) return;
+    if (getTrackedPositions(true).length === 0) return;
     _pnlPollBusy = true;
     try {
       const result = await getMyPositions({ force: true, silent: true }).catch(() => null);
@@ -822,11 +864,43 @@ Summarize the current portfolio health, total fees earned, and performance of al
 // ═══════════════════════════════════════════
 //  GRACEFUL SHUTDOWN
 // ═══════════════════════════════════════════
+let _shuttingDown = false;
+
+function withTimeout(promise, ms) {
+  let timer = null;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(null), ms);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 async function shutdown(signal) {
+  if (_shuttingDown) {
+    log("shutdown", `Received ${signal} while shutdown is already in progress.`);
+    return;
+  }
+  _shuttingDown = true;
+
   log("shutdown", `Received ${signal}. Shutting down...`);
   stopPolling();
-  const positions = await getMyPositions();
-  log("shutdown", `Open positions at shutdown: ${positions.total_positions}`);
+  stopCronJobs();
+
+  const positions = await withTimeout(
+    getMyPositions({ force: true, silent: true }).catch((error) => {
+      log("shutdown", `Position snapshot failed during shutdown: ${error.message}`);
+      return null;
+    }),
+    5000
+  );
+  if (positions) {
+    log("shutdown", `Open positions at shutdown: ${positions.total_positions}`);
+  } else {
+    log("shutdown", "Open position snapshot skipped during shutdown timeout");
+  }
   process.exit(0);
 }
 
@@ -876,8 +950,7 @@ function getDeterministicCloseRule(position, managementConfig) {
   if (
     position.active_bin != null &&
     position.upper_bin != null &&
-    position.active_bin > position.upper_bin + managementConfig.outOfRangeBinsToClose &&
-    (position.age_minutes ?? 0) >= (managementConfig.minAgeBeforeOOR ?? 0)
+    position.active_bin > position.upper_bin + managementConfig.outOfRangeBinsToClose
   ) {
     return { action: "CLOSE", rule: 3, reason: "pumped far above range" };
   }
@@ -899,6 +972,58 @@ function getDeterministicCloseRule(position, managementConfig) {
   return null;
 }
 
+function buildGmgnFunnelReport(stageCounts, allFiltered = [], { fromStage = 1 } = {}) {
+  if (!stageCounts) return null;
+  const sc = stageCounts;
+  const funnel = `GMGN funnel: ranked=${sc.ranked ?? "?"} → S1=${sc.s1 ?? "?"} → S2=${sc.s2 ?? "?"} → S3=${sc.s3 ?? "?"} → S4=${sc.s4 ?? "?"} → final=${sc.s5 ?? "?"}`;
+  const byStage = {};
+  for (const f of allFiltered) {
+    if (f.stage < fromStage) continue;
+    const key = `s${f.stage}`;
+    if (!byStage[key]) byStage[key] = [];
+    byStage[key].push(`${f.name}: ${f.reason}`);
+  }
+  const stageLabels = { s2: "S2 info", s3: "S3 pool", s4: "S4 indicators", s5: "S5 pick" };
+  const details = Object.entries(byStage)
+    .map(([key, items]) => `${stageLabels[key] || key}:\n${items.map(r => `  • ${r}`).join("\n")}`)
+    .join("\n");
+  return details ? `${funnel}\n\n${details}` : funnel;
+}
+
+function getLoneCandidateSkipReason({ pool, sw, n, ti } = {}) {
+  if (!pool) return "missing candidate data";
+  const smartWalletCount = Math.max(sw?.in_pool?.length ?? 0, Number(pool.gmgn_smart_wallets ?? 0) || 0);
+  const tokenInfo = ti || {};
+  const hasNarrative = !!n?.narrative;
+  const globalFeesSol = Number(tokenInfo.global_fees_sol ?? pool.gmgn_total_fee_sol);
+  const top10Pct = Number(tokenInfo.audit?.top_holders_pct ?? pool.gmgn_token_info_top10_pct ?? pool.gmgn_top10_holder_pct);
+  const botPct = Number(tokenInfo.audit?.bot_holders_pct ?? pool.gmgn_bot_degen_pct);
+  if (pool.is_wash) return "wash trading was flagged";
+  if (pool.is_rugpull && smartWalletCount === 0) return "rugpull risk was flagged and no smart wallets offset it";
+  if (pool.is_pvp && smartWalletCount === 0) return "PVP symbol conflict and no smart-wallet confirmation";
+  if (Number.isFinite(globalFeesSol) && globalFeesSol < config.screening.minTokenFeesSol) {
+    return `token fees ${globalFeesSol} SOL below minimum ${config.screening.minTokenFeesSol} SOL`;
+  }
+  if (Number.isFinite(top10Pct) && top10Pct > config.screening.maxTop10Pct) {
+    return `top10 concentration ${top10Pct}% above maximum ${config.screening.maxTop10Pct}%`;
+  }
+  if (Number.isFinite(botPct) && botPct > config.screening.maxBotHoldersPct) {
+    return `bot holders ${botPct}% above maximum ${config.screening.maxBotHoldersPct}%`;
+  }
+  if (!hasNarrative && smartWalletCount === 0) return "only candidate has no narrative and no smart-wallet confirmation";
+  return null;
+}
+
+function computeBinsBelow(volatility) {
+  const parsedVolatility = Number(volatility);
+  if (!Number.isFinite(parsedVolatility) || parsedVolatility <= 0) {
+    throw new Error(`Invalid volatility ${volatility ?? "unknown"} — refusing volatility-scaled deploy.`);
+  }
+  const lo = config.strategy.minBinsBelow;
+  const hi = config.strategy.maxBinsBelow;
+  return Math.max(lo, Math.min(hi, Math.round(lo + (parsedVolatility / 5) * (hi - lo))));
+}
+
 // ═══════════════════════════════════════════
 //  INTERACTIVE REPL
 // ═══════════════════════════════════════════
@@ -911,6 +1036,7 @@ const MAX_HISTORY = 20;    // keep last 20 messages (10 exchanges)
 let _ttyInterface = null;
 let _latestCandidates = [];
 let _latestCandidatesAt = null;
+let _pendingInput = null; // { key, page, menuMsgId }
 
 function setLatestCandidates(candidates = []) {
   _latestCandidates = Array.isArray(candidates) ? candidates : [];
@@ -955,7 +1081,8 @@ function formatConfigSnapshot() {
   return [
     "Config snapshot",
     "",
-    `Strategy: ${config.strategy.strategy} | binsBelow: ${config.strategy.minBinsBelow}-${config.strategy.maxBinsBelow} | default ${config.strategy.defaultBinsBelow}`,
+    `Screening source: ${config.screening.source}`,
+    `Strategy: ${config.strategy.strategy} | bins: [${config.strategy.minBinsBelow}–${config.strategy.maxBinsBelow}] (volatility-scaled)`,
     `Deploy: ${config.management.deployAmountSol} SOL | gasReserve: ${config.management.gasReserve} | maxPositions: ${config.risk.maxPositions}`,
     `Stop loss: ${config.management.stopLossPct}% | take profit: ${config.management.takeProfitPct}%`,
     `Trailing: ${config.management.trailingTakeProfit ? "on" : "off"} | trigger ${config.management.trailingTriggerPct}% | drop ${config.management.trailingDropPct}%`,
@@ -963,6 +1090,7 @@ function formatConfigSnapshot() {
     `Repeat deploy cooldown: ${config.management.repeatDeployCooldownEnabled ? "on" : "off"} | ${config.management.repeatDeployCooldownTriggerCount}x / ${config.management.repeatDeployCooldownHours}h | min fee earned ${config.management.repeatDeployCooldownMinFeeEarnedPct}% | ${config.management.repeatDeployCooldownScope}`,
     `Yield floor: ${config.management.minFeePerTvl24h}% | min age ${config.management.minAgeBeforeYieldCheck}m`,
     `Screening: ${config.screening.category} / ${config.screening.timeframe} | TVL ${config.screening.minTvl}-${config.screening.maxTvl}`,
+    `GMGN interval: ${config.gmgn.interval} | OrderBy: ${config.gmgn.orderBy} | Dir: ${config.gmgn.direction}`,
     `Intervals: manage ${config.schedule.managementIntervalMin}m | screen ${config.schedule.screeningIntervalMin}m`,
     `HiveMind: ${isHiveMindEnabled() ? "enabled" : "disabled"}${config.hiveMind.agentId ? ` | ${config.hiveMind.agentId}` : ""}`,
   ].join("\n");
@@ -988,10 +1116,30 @@ function settingValue(key) {
     trailingTakeProfit: config.management.trailingTakeProfit,
     useDiscordSignals: config.screening.useDiscordSignals,
     blockPvpSymbols: config.screening.blockPvpSymbols,
+    screeningSource: config.screening.source,
+    gmgnRequireKol: config.gmgn.requireKol,
+    gmgnInterval: config.gmgn.interval,
+    gmgnIndicatorFilter: config.gmgn.indicatorFilter,
+    gmgnMinVolume: config.gmgn.minVolume,
+    gmgnMinTokenAgeHours: config.gmgn.minTokenAgeHours,
+    gmgnMaxTokenAgeHours: config.gmgn.maxTokenAgeHours,
+    gmgnMaxBundlerRate: config.gmgn.maxBundlerRate,
+    gmgnPreferredKolNames: config.gmgn.preferredKolNames,
+    gmgnPreferredKolMinHoldPct: config.gmgn.preferredKolMinHoldPct,
+    gmgnDumpKolNames: config.gmgn.dumpKolNames,
+    gmgnDumpKolMinHoldPct: config.gmgn.dumpKolMinHoldPct,
+    gmgnIndicatorInterval: config.gmgn.indicatorInterval,
+    gmgnRequireBullishSt: config.gmgn.indicatorRules?.requireBullishSupertrend,
+    gmgnRejectAtBottom: config.gmgn.indicatorRules?.rejectAlreadyAtBottom,
+    gmgnRequireAboveSt: config.gmgn.indicatorRules?.requireAboveSupertrend,
+    gmgnMinRsi: config.gmgn.indicatorRules?.minRsi,
+    gmgnMaxRsi: config.gmgn.indicatorRules?.maxRsi,
+    gmgnMinKolCount: config.gmgn.minKolCount,
+    gmgnMinTotalFeeSol: config.gmgn.minTotalFeeSol,
+    gmgnMinHolders: config.gmgn.minHolders,
     strategy: config.strategy.strategy,
     minBinsBelow: config.strategy.minBinsBelow,
     maxBinsBelow: config.strategy.maxBinsBelow,
-    defaultBinsBelow: config.strategy.defaultBinsBelow,
     deployAmountSol: config.management.deployAmountSol,
     gasReserve: config.management.gasReserve,
     maxPositions: config.risk.maxPositions,
@@ -1039,13 +1187,20 @@ function stepButtons(key, label, step, { digits = 2 } = {}) {
   ];
 }
 
+function inputButton(key, label, { digits = 0 } = {}) {
+  const value = settingValue(key);
+  const shown = value == null ? "off" : Number.isFinite(Number(value)) ? String(parseFloat(Number(value).toFixed(digits))) : String(value);
+  return [settingButton(`${label}: ${shown} ✏`, `cfg:input:${key}`)];
+}
+
 function renderSettingsMenu(page = "main") {
   const title = page === "main" ? "Settings menu" : `Settings: ${page}`;
   const summary = [
     title,
     "",
     `Mode: ${config.management.solMode ? "SOL" : "USD"} | Relay: ${config.api.lpAgentRelayEnabled ? "on" : "off"}`,
-    `Strategy: ${config.strategy.strategy} | bins ${config.strategy.minBinsBelow}-${config.strategy.maxBinsBelow} | deploy ${config.management.deployAmountSol} SOL`,
+    `Screening: ${config.screening.source} | GMGN KOL ${config.gmgn.requireKol ? "required" : "preferred"}`,
+    `Strategy: ${config.strategy.strategy} | deploy ${config.management.deployAmountSol} SOL | max pos ${config.risk.maxPositions}`,
     `TP/SL: ${config.management.takeProfitPct}% / ${config.management.stopLossPct}% | trailing ${config.management.trailingTakeProfit ? "on" : "off"}`,
     `Indicators: ${config.indicators.enabled ? "on" : "off"} | entry ${config.indicators.entryPreset} | ${fmtSettingValue(config.indicators.intervals)}`,
   ].join("\n");
@@ -1054,8 +1209,13 @@ function renderSettingsMenu(page = "main") {
     [
       settingButton("Main", "cfg:page:main"),
       settingButton("Risk", "cfg:page:risk"),
+      settingButton("Strategy", "cfg:page:strategy"),
+    ],
+    [
       settingButton("Screen", "cfg:page:screen"),
       settingButton("Indicators", "cfg:page:indicators"),
+      settingButton("GMGN", "cfg:page:gmgn"),
+      settingButton("KOL", "cfg:page:kol"),
     ],
   ];
 
@@ -1069,32 +1229,77 @@ function renderSettingsMenu(page = "main") {
   let rows;
   if (page === "risk") {
     rows = [
-      stepButtons("deployAmountSol", "Deploy", 0.1),
-      stepButtons("gasReserve", "Gas", 0.05),
-      stepButtons("maxPositions", "Max pos", 1, { digits: 0 }),
-      stepButtons("maxDeployAmount", "Max SOL", 1, { digits: 0 }),
-      stepButtons("takeProfitPct", "TP %", 1, { digits: 0 }),
-      stepButtons("stopLossPct", "SL %", 5, { digits: 0 }),
+      inputButton("deployAmountSol", "Deploy SOL", { digits: 2 }),
+      inputButton("gasReserve", "Gas reserve", { digits: 2 }),
+      inputButton("maxPositions", "Max positions"),
+      inputButton("maxDeployAmount", "Max SOL"),
+      inputButton("takeProfitPct", "TP %"),
+      inputButton("stopLossPct", "SL %"),
       [toggleButton("trailingTakeProfit", "Trailing TP")],
-      stepButtons("trailingTriggerPct", "Trail trigger", 0.5, { digits: 1 }),
-      stepButtons("trailingDropPct", "Trail drop", 0.5, { digits: 1 }),
+      inputButton("trailingTriggerPct", "Trail trigger", { digits: 1 }),
+      inputButton("trailingDropPct", "Trail drop", { digits: 1 }),
       [toggleButton("repeatDeployCooldownEnabled", "Repeat cooldown")],
-      stepButtons("repeatDeployCooldownTriggerCount", "Repeat count", 1, { digits: 0 }),
-      stepButtons("repeatDeployCooldownHours", "Repeat hrs", 1, { digits: 0 }),
-      stepButtons("repeatDeployCooldownMinFeeEarnedPct", "Fee earned %", 0.1, { digits: 1 }),
+      inputButton("repeatDeployCooldownTriggerCount", "Repeat count"),
+      inputButton("repeatDeployCooldownHours", "Repeat hrs"),
+      inputButton("repeatDeployCooldownMinFeeEarnedPct", "Min fee earned %", { digits: 1 }),
     ];
   } else if (page === "screen") {
     rows = [
+      [
+        settingButton("Source: Meteora", "cfg:set:screeningSource:meteora"),
+        settingButton("Source: GMGN", "cfg:set:screeningSource:gmgn"),
+      ],
+      [toggleButton("gmgnRequireKol", "GMGN require KOL")],
       [toggleButton("useDiscordSignals", "Discord signals"), toggleButton("blockPvpSymbols", "PVP hard block")],
       [
-        settingButton(`Strategy: spot`, "cfg:set:strategy:spot"),
-        settingButton(`Strategy: bid_ask`, "cfg:set:strategy:bid_ask"),
+        settingButton("5m", "cfg:set:gmgnInterval:5m"),
+        settingButton("1h", "cfg:set:gmgnInterval:1h"),
+        settingButton("6h", "cfg:set:gmgnInterval:6h"),
+        settingButton("24h", "cfg:set:gmgnInterval:24h"),
       ],
-      stepButtons("minBinsBelow", "Min bins", 1, { digits: 0 }),
-      stepButtons("maxBinsBelow", "Max bins", 1, { digits: 0 }),
-      stepButtons("defaultBinsBelow", "Default bins", 1, { digits: 0 }),
-      stepButtons("managementIntervalMin", "Manage min", 1, { digits: 0 }),
-      stepButtons("screeningIntervalMin", "Screen min", 5, { digits: 0 }),
+      [
+        inputButton("gmgnMinVolume", "Min volume")[0],
+        inputButton("gmgnMinTokenAgeHours", "Min token age (h)")[0],
+      ],
+      [
+        inputButton("gmgnMaxTokenAgeHours", "Max token age (h)")[0],
+        inputButton("gmgnMaxBundlerRate", "Max bundler %")[0],
+      ],
+      [settingButton("KOL settings", "cfg:page:kol")],
+      inputButton("managementIntervalMin", "Manage interval (min)"),
+      inputButton("screeningIntervalMin", "Screen interval (min)"),
+    ];
+  } else if (page === "strategy") {
+    rows = [
+      [
+        settingButton("spot", "cfg:set:strategy:spot"),
+        settingButton("bid_ask", "cfg:set:strategy:bid_ask"),
+      ],
+      inputButton("minBinsBelow", "Min bins"),
+      inputButton("maxBinsBelow", "Max bins"),
+    ];
+  } else if (page === "gmgn") {
+    rows = [
+      [toggleButton("gmgnIndicatorFilter", "Indicator filter"), toggleButton("gmgnRequireKol", "Require KOL")],
+      [
+        settingButton("TF: 5m", "cfg:set:gmgnIndicatorInterval:5_MINUTE"),
+        settingButton("TF: 15m", "cfg:set:gmgnIndicatorInterval:15_MINUTE"),
+        settingButton("TF: 1h", "cfg:set:gmgnIndicatorInterval:1h"),
+      ],
+      [toggleButton("gmgnRequireBullishSt", "Bullish ST"), toggleButton("gmgnRejectAtBottom", "Reject at bottom"), toggleButton("gmgnRequireAboveSt", "Above ST")],
+      inputButton("gmgnMinRsi", "Min RSI"),
+      inputButton("gmgnMaxRsi", "Max RSI"),
+      inputButton("gmgnMinKolCount", "Min KOL"),
+      inputButton("gmgnMinTotalFeeSol", "Min fee SOL"),
+      inputButton("gmgnMinHolders", "Min holders"),
+      [settingButton("KOL settings", "cfg:page:kol")],
+    ];
+  } else if (page === "kol") {
+    rows = [
+      inputButton("gmgnPreferredKolNames", "Preferred KOL (comma-sep)"),
+      inputButton("gmgnPreferredKolMinHoldPct", "Preferred KOL min hold %"),
+      inputButton("gmgnDumpKolNames", "Dump KOL (comma-sep)"),
+      inputButton("gmgnDumpKolMinHoldPct", "Dump KOL min hold %"),
     ];
   } else if (page === "indicators") {
     rows = [
@@ -1114,10 +1319,14 @@ function renderSettingsMenu(page = "main") {
         settingButton("Exit: RSI", "cfg:set:indicatorExitPreset:rsi_reversal"),
         settingButton("Exit: BB+RSI", "cfg:set:indicatorExitPreset:bb_plus_rsi"),
       ],
-      stepButtons("rsiLength", "RSI len", 1, { digits: 0 }),
+      inputButton("rsiLength", "RSI length"),
     ];
   } else {
     rows = [
+      [
+        settingButton("Source: Meteora", "cfg:set:screeningSource:meteora"),
+        settingButton("Source: GMGN", "cfg:set:screeningSource:gmgn"),
+      ],
       [toggleButton("solMode", "SOL mode"), toggleButton("lpAgentRelayEnabled", "LPAgent relay")],
       [toggleButton("chartIndicatorsEnabled", "Chart indicators"), toggleButton("trailingTakeProfit", "Trailing TP")],
       [
@@ -1148,6 +1357,9 @@ function normalizeMenuValue(key, raw) {
     if (raw === "both") return ["5_MINUTE", "15_MINUTE"];
     return [raw];
   }
+  if (key === "gmgnPreferredKolNames" || key === "gmgnDumpKolNames") {
+    return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  }
   return parseConfigValue(raw);
 }
 
@@ -1159,6 +1371,21 @@ async function applySettingsMenuCallback(msg) {
 
   if (action === "noop") {
     await answerCallbackQuery(msg.callbackQueryId);
+    return;
+  }
+  if (action === "input") {
+    const inputKey = parts[2];
+    const currentVal = settingValue(inputKey);
+    const inputPage = ["gmgnPreferredKolNames", "gmgnPreferredKolMinHoldPct", "gmgnDumpKolNames", "gmgnDumpKolMinHoldPct"].includes(inputKey) ? "kol"
+      : ["gmgnMinVolume", "gmgnMaxBundlerRate", "gmgnMinTokenAgeHours", "gmgnMaxTokenAgeHours"].includes(inputKey) ? "screen"
+      : inputKey.startsWith("gmgn") && inputKey !== "gmgnRequireKol" ? "gmgn"
+      : inputKey.startsWith("indicator") || inputKey === "chartIndicatorsEnabled" || inputKey === "rsiLength" || inputKey === "requireAllIntervals" ? "indicators"
+      : ["minBinsBelow", "maxBinsBelow"].includes(inputKey) ? "strategy"
+      : ["useDiscordSignals", "blockPvpSymbols", "managementIntervalMin", "screeningIntervalMin", "screeningSource", "gmgnRequireKol"].includes(inputKey) ? "screen"
+      : "risk";
+    _pendingInput = { key: inputKey, page: inputPage, menuMsgId: msg.messageId };
+    await answerCallbackQuery(msg.callbackQueryId);
+    await sendMessage(`Enter new value for ${inputKey} (current: ${currentVal ?? "off"}):\nSend a number, or "off" to clear.`);
     return;
   }
   if (action === "close") {
@@ -1195,7 +1422,6 @@ async function applySettingsMenuCallback(msg) {
     if (key === "repeatDeployCooldownTriggerCount") value = Math.max(1, Math.round(value));
     if (key === "repeatDeployCooldownHours") value = Math.max(0, Math.round(value));
     if (key === "repeatDeployCooldownMinFeeEarnedPct") value = Math.max(0, value);
-    if (["minBinsBelow", "maxBinsBelow", "defaultBinsBelow"].includes(key)) value = Math.max(35, Math.round(value));
     if (["deployAmountSol", "gasReserve", "maxDeployAmount"].includes(key)) value = Math.max(0, value);
   } else if (action === "set") {
     value = normalizeMenuValue(key, parts.slice(3).join(":"));
@@ -1212,11 +1438,17 @@ async function applySettingsMenuCallback(msg) {
     await answerCallbackQuery(msg.callbackQueryId, "Config update failed");
     return;
   }
-  page = key.startsWith("indicator") || key === "chartIndicatorsEnabled" || key === "rsiLength" || key === "requireAllIntervals"
-    ? "indicators"
-    : ["useDiscordSignals", "blockPvpSymbols", "strategy", "minBinsBelow", "maxBinsBelow", "defaultBinsBelow", "managementIntervalMin", "screeningIntervalMin"].includes(key)
-      ? "screen"
-      : "risk";
+  page = ["gmgnPreferredKolNames", "gmgnPreferredKolMinHoldPct", "gmgnDumpKolNames", "gmgnDumpKolMinHoldPct"].includes(key) ? "kol"
+    : ["gmgnMinVolume", "gmgnMaxBundlerRate", "gmgnMinTokenAgeHours", "gmgnMaxTokenAgeHours"].includes(key) ? "screen"
+    : key.startsWith("gmgn") && key !== "gmgnRequireKol"
+      ? "gmgn"
+      : key.startsWith("indicator") || key === "chartIndicatorsEnabled" || key === "rsiLength" || key === "requireAllIntervals"
+        ? "indicators"
+        : ["minBinsBelow", "maxBinsBelow"].includes(key)
+          ? "strategy"
+          : ["useDiscordSignals", "blockPvpSymbols", "managementIntervalMin", "screeningIntervalMin", "screeningSource", "gmgnRequireKol"].includes(key)
+            ? "screen"
+            : "risk";
   await answerCallbackQuery(msg.callbackQueryId, `Updated ${key}`);
   await showSettingsMenu({ messageId: msg.messageId, page });
 }
@@ -1256,7 +1488,8 @@ async function runDeterministicScreen(limit = 5) {
     const lines = candidates.map((pool, i) => {
       const feeTvl = pool.fee_active_tvl_ratio ?? pool.fee_tvl_ratio ?? "?";
       const vol = pool.volume_window ?? pool.volume_24h ?? "?";
-      return `${i + 1}. ${pool.name} | ${pool.pool}\n   fee/aTVL ${feeTvl}% | vol $${vol} | organic ${pool.organic_score ?? "?"}`;
+      const source = pool.gmgn ? ` | GMGN smart ${pool.gmgn_smart_wallets ?? "?"}, KOL ${pool.gmgn_kol_wallets ?? "?"}, total fee ${pool.gmgn_total_fee_sol ?? "?"} SOL` : ` | organic ${pool.organic_score ?? "?"}`;
+      return `${i + 1}. ${pool.name} | ${pool.pool}\n   fee/aTVL ${feeTvl}% | vol $${vol}${source}`;
     });
     return `Top candidates (${candidates.length})\n\n${lines.join("\n")}`;
   }
@@ -1347,6 +1580,28 @@ async function drainTelegramQueue() {
 async function telegramHandler(msg) {
   const text = msg?.text?.trim();
   if (!text) return;
+
+  if (_pendingInput && !msg.isCallback && !text.startsWith("/")) {
+    const { key, page, menuMsgId } = _pendingInput;
+    _pendingInput = null;
+    let value;
+    if (text.toLowerCase() === "off" || text.toLowerCase() === "null") {
+      value = null;
+    } else {
+      value = Number(text);
+      if (!Number.isFinite(value)) {
+        await sendMessage(`Invalid value "${text}" — must be a number or "off".`);
+        return;
+      }
+    }
+    const result = await executeTool("update_config", { changes: { [key]: value }, reason: "Telegram input field" });
+    if (!result?.success) {
+      await sendMessage(`Failed to update ${key}.`);
+      return;
+    }
+    await showSettingsMenu({ messageId: menuMsgId, page });
+    return;
+  }
   if (msg?.isCallback && text.startsWith("cfg:")) {
     try {
       await applySettingsMenuCallback(msg);
@@ -1635,40 +1890,6 @@ function fmtPct(value) {
   return Number.isFinite(n) ? `${n.toFixed(2)}%` : "?";
 }
 
-function getLoneCandidateSkipReason({ pool, sw, n, ti } = {}) {
-  if (!pool) return "missing candidate data";
-  const smartWalletCount = Math.max(sw?.in_pool?.length ?? 0, Number(pool.gmgn_smart_wallets ?? 0) || 0);
-  const tokenInfo = ti || {};
-  const hasNarrative = !!n?.narrative;
-  const globalFeesSol = Number(tokenInfo.global_fees_sol ?? pool.gmgn_total_fee_sol);
-  const top10Pct = Number(tokenInfo.audit?.top_holders_pct ?? pool.gmgn_token_info_top10_pct ?? pool.gmgn_top10_holder_pct);
-  const botPct = Number(tokenInfo.audit?.bot_holders_pct ?? pool.gmgn_bot_degen_pct);
-  if (pool.is_wash) return "wash trading was flagged";
-  if (pool.is_rugpull && smartWalletCount === 0) return "rugpull risk was flagged and no smart wallets offset it";
-  if (pool.is_pvp && smartWalletCount === 0) return "PVP symbol conflict and no smart-wallet confirmation";
-  if (Number.isFinite(globalFeesSol) && globalFeesSol < config.screening.minTokenFeesSol) {
-    return `token fees ${globalFeesSol} SOL below minimum ${config.screening.minTokenFeesSol} SOL`;
-  }
-  if (Number.isFinite(top10Pct) && top10Pct > config.screening.maxTop10Pct) {
-    return `top10 concentration ${top10Pct}% above maximum ${config.screening.maxTop10Pct}%`;
-  }
-  if (Number.isFinite(botPct) && botPct > config.screening.maxBotHoldersPct) {
-    return `bot holders ${botPct}% above maximum ${config.screening.maxBotHoldersPct}%`;
-  }
-  if (!hasNarrative && smartWalletCount === 0) return "only candidate has no narrative and no smart-wallet confirmation";
-  return null;
-}
-
-function computeBinsBelow(volatility) {
-  const parsedVolatility = Number(volatility);
-  if (!Number.isFinite(parsedVolatility) || parsedVolatility <= 0) {
-    throw new Error(`Invalid volatility ${volatility ?? "unknown"} — refusing volatility-scaled deploy.`);
-  }
-  const lo = config.strategy.minBinsBelow;
-  const hi = config.strategy.maxBinsBelow;
-  return Math.max(lo, Math.min(hi, Math.round(lo + (parsedVolatility / 5) * (hi - lo))));
-}
-
 // Register restarter — when update_config changes intervals, running cron jobs get replaced
 registerCronRestarter(() => { if (cronStarted) startCronJobs(); });
 
@@ -1797,9 +2018,9 @@ Commands:
     // ── auto: agent picks and deploys ───────
     if (input.toLowerCase() === "auto") {
       await runBusy(async () => {
-        console.log("\nAgent is picking and deploying...\n");
+        console.log("\nAgent is screening for a deploy-worthy candidate...\n");
         const { content: reply } = await agentLoop(
-          `get_top_candidates and deploy only if a candidate is clearly worth it. If there is only one weak candidate, report NO DEPLOY. For a valid deploy, use amount_y=${DEPLOY}, amount_x=0, bins_above=0, and bins_below from positive volatility. Execute now, don't ask.`,
+          `get_top_candidates, decide whether any candidate is worth deploying, and only call deploy_position with ${DEPLOY} SOL if conviction is strong. If only one candidate is returned and it lacks narrative or smart-wallet confirmation, skip and report NO DEPLOY. Execute now, don't ask.`,
           config.llm.maxSteps,
           [],
           "SCREENER"

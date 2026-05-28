@@ -15,7 +15,12 @@
       "Bash(python *)",
       "Bash(pip install *)",
       "Bash(node *)",
-      "Bash(claude plugin *)"
+      "Bash(claude plugin *)",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "Bash(dir \"C:\\\\Dev\\\\NodeJs\\\\MeridianBot\" /b)",
+      "Bash(findstr /v node_modules)",
+      "Bash(\\\\.jsonl\" | sort -r | head -10 || find \"C:\\\\Dev\\\\NodeJs\\\\MeridianBot\\\\logs\" -name \"*.log\" -o -name \"*.jsonl\" 2>/dev/null | sort -r | head -10)",
+      "Bash(awk '{print $1}')"
     ]
   }
 }

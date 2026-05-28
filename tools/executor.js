@@ -29,13 +29,49 @@ import { execSync, spawn } from "child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "../user-config.json");
+const GMGN_CONFIG_PATH = path.join(__dirname, "../gmgn-config.json");
 const POOL_DISCOVERY_BASE = "https://pool-discovery-api.datapi.meteora.ag";
+const MIN_VOLATILITY_TIMEFRAME = "30m";
+const TIMEFRAME_MINUTES = {
+  "5m": 5,
+  "15m": 15,
+  "30m": 30,
+  "1h": 60,
+  "2h": 120,
+  "4h": 240,
+  "12h": 720,
+  "24h": 1440,
+};
 import { log, logAction } from "../logger.js";
 import { notifyDeploy, notifyClose, notifySwap } from "../telegram.js";
+
+const SENSITIVE_CONFIG_KEYS = new Set([
+  "gmgnApiKey",
+  "hiveMindApiKey",
+  "publicApiKey",
+]);
+
+function redactConfigValue(key, value) {
+  if (!SENSITIVE_CONFIG_KEYS.has(key)) return value;
+  return typeof value === "string" && value ? "***redacted***" : value;
+}
+
+function redactAppliedConfig(applied) {
+  return Object.fromEntries(
+    Object.entries(applied || {}).map(([key, value]) => [key, redactConfigValue(key, value)]),
+  );
+}
 
 function numberOrNull(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function getVolatilityTimeframe(sourceTimeframe) {
+  const source = String(sourceTimeframe || "").trim();
+  const sourceMinutes = TIMEFRAME_MINUTES[source];
+  const minMinutes = TIMEFRAME_MINUTES[MIN_VOLATILITY_TIMEFRAME];
+  return sourceMinutes != null && sourceMinutes >= minMinutes ? source : MIN_VOLATILITY_TIMEFRAME;
 }
 
 function poolDetailTvl(pool) {
@@ -54,10 +90,10 @@ function poolDetailVolatility(pool) {
   return numberOrNull(pool?.volatility);
 }
 
-async function fetchFreshPoolDetail(poolAddress) {
-  const timeframe = encodeURIComponent(config.screening.timeframe || "5m");
+async function fetchFreshPoolDetail(poolAddress, timeframe = config.screening.timeframe || "5m") {
+  const encodedTimeframe = encodeURIComponent(timeframe);
   const filter = encodeURIComponent(`pool_address=${poolAddress}`);
-  const url = `${POOL_DISCOVERY_BASE}/pools?page_size=1&filter_by=${filter}&timeframe=${timeframe}`;
+  const url = `${POOL_DISCOVERY_BASE}/pools?page_size=1&filter_by=${filter}&timeframe=${encodedTimeframe}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Pool Discovery API error: ${res.status} ${res.statusText}`);
   const data = await res.json();
@@ -111,11 +147,24 @@ async function validateDeployPoolThresholds(args) {
     };
   }
 
-  const volatility = poolDetailVolatility(detail);
+  const volatilityTimeframe = getVolatilityTimeframe(config.screening.timeframe || "5m");
+  let volatilityDetail = detail;
+  if ((config.screening.timeframe || "5m") !== volatilityTimeframe) {
+    try {
+      volatilityDetail = await fetchFreshPoolDetail(args.pool_address, volatilityTimeframe);
+    } catch (error) {
+      return {
+        pass: false,
+        reason: `Could not verify pool ${volatilityTimeframe} volatility before deploy: ${error.message}`,
+      };
+    }
+  }
+
+  const volatility = poolDetailVolatility(volatilityDetail);
   if (volatility == null || volatility <= 0) {
     return {
       pass: false,
-      reason: `Pool volatility ${volatility ?? "unknown"} is unusable. Refusing deploy.`,
+      reason: `Pool ${volatilityTimeframe} volatility ${volatility ?? "unknown"} is unusable. Refusing deploy.`,
     };
   }
 
@@ -141,67 +190,6 @@ async function validateDeployPoolThresholds(args) {
 // Registered by index.js so update_config can restart cron jobs when intervals change
 let _cronRestarter = null;
 export function registerCronRestarter(fn) { _cronRestarter = fn; }
-
-function coerceBoolean(value, key) {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "true") return true;
-    if (normalized === "false") return false;
-  }
-  throw new Error(`${key} must be true or false`);
-}
-
-function coerceFiniteNumber(value, key) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) throw new Error(`${key} must be a finite number`);
-  return n;
-}
-
-function coerceString(value, key) {
-  if (typeof value !== "string") throw new Error(`${key} must be a string`);
-  return value.trim();
-}
-
-function coerceStringArray(value, key) {
-  if (!Array.isArray(value)) throw new Error(`${key} must be an array of strings`);
-  return value.map((entry) => coerceString(entry, key)).filter(Boolean);
-}
-
-function normalizeConfigValue(key, value) {
-  const booleanKeys = new Set([
-    "excludeHighSupplyConcentration",
-    "useDiscordSignals",
-    "avoidPvpSymbols",
-    "blockPvpSymbols",
-    "autoSwapAfterClaim",
-    "trailingTakeProfit",
-    "solMode",
-    "darwinEnabled",
-    "lpAgentRelayEnabled",
-  ]);
-  const arrayKeys = new Set(["allowedLaunchpads", "blockedLaunchpads"]);
-  const stringKeys = new Set([
-    "timeframe",
-    "category",
-    "discordSignalMode",
-    "strategy",
-    "managementModel",
-    "screeningModel",
-    "generalModel",
-    "hiveMindUrl",
-    "hiveMindApiKey",
-    "agentId",
-    "hiveMindPullMode",
-    "publicApiKey",
-    "agentMeridianApiUrl",
-  ]);
-  if (value === null) return null;
-  if (booleanKeys.has(key)) return coerceBoolean(value, key);
-  if (arrayKeys.has(key)) return coerceStringArray(value, key);
-  if (stringKeys.has(key)) return coerceString(value, key);
-  return coerceFiniteNumber(value, key);
-}
 
 // Map tool names to implementations
 const toolMap = {
@@ -240,15 +228,20 @@ const toolMap = {
       }
       // Delay restart so this tool response (and Telegram message) gets sent first
       setTimeout(() => {
-        const child = spawn(process.execPath, process.argv.slice(1), {
-          detached: true,
-          stdio: "inherit",
-          cwd: process.cwd(),
-        });
-        child.unref();
+        if (!process.env.pm_id) {
+          const child = spawn(process.execPath, process.argv.slice(1), {
+            detached: true,
+            stdio: "inherit",
+            cwd: process.cwd(),
+          });
+          child.unref();
+        }
         process.exit(0);
       }, 3000);
-      return { success: true, updated: true, message: `Updated! Restarting in 3s...\n${result}` };
+      const restartMode = process.env.pm_id
+        ? "PM2 detected — exiting in 3s so PM2 can restart the managed process."
+        : "Restarting in 3s...";
+      return { success: true, updated: true, message: `Updated! ${restartMode}\n${result}` };
     } catch (e) {
       return { success: false, error: e.message };
     }
@@ -298,6 +291,7 @@ const toolMap = {
     // Flat key → config section mapping (covers everything in config.js)
     const CONFIG_MAP = {
       // screening
+      screeningSource: ["screening", "source"],
       minFeeActiveTvlRatio: ["screening", "minFeeActiveTvlRatio"],
       excludeHighSupplyConcentration: ["screening", "excludeHighSupplyConcentration"],
       minTvl: ["screening", "minTvl"],
@@ -367,8 +361,8 @@ const toolMap = {
       maxTokens: ["llm", "maxTokens"],
       maxSteps: ["llm", "maxSteps"],
       // strategy
-      strategy: ["strategy", "strategy"],
-      binsBelow: ["strategy", "maxBinsBelow", ["maxBinsBelow"]],
+      strategy:     ["strategy", "strategy"],
+      binsBelow:    ["strategy", "maxBinsBelow", ["maxBinsBelow"]],
       minBinsBelow: ["strategy", "minBinsBelow"],
       maxBinsBelow: ["strategy", "maxBinsBelow"],
       defaultBinsBelow: ["strategy", "defaultBinsBelow"],
@@ -381,6 +375,52 @@ const toolMap = {
       publicApiKey: ["api", "publicApiKey"],
       agentMeridianApiUrl: ["api", "url"],
       lpAgentRelayEnabled: ["api", "lpAgentRelayEnabled"],
+      // GMGN screening
+      gmgnApiKey: ["gmgn", "apiKey"],
+      gmgnBaseUrl: ["gmgn", "baseUrl"],
+      gmgnInterval: ["gmgn", "interval"],
+      gmgnOrderBy: ["gmgn", "orderBy"],
+      gmgnDirection: ["gmgn", "direction"],
+      gmgnLimit: ["gmgn", "limit"],
+      gmgnEnrichLimit: ["gmgn", "enrichLimit"],
+      gmgnRequestDelayMs: ["gmgn", "requestDelayMs"],
+      gmgnMaxRetries: ["gmgn", "maxRetries"],
+      gmgnHoldersLimit: ["gmgn", "holdersLimit"],
+      gmgnKlineResolution: ["gmgn", "klineResolution"],
+      gmgnKlineLookbackMinutes: ["gmgn", "klineLookbackMinutes"],
+      gmgnFilters: ["gmgn", "filters"],
+      gmgnPlatforms: ["gmgn", "platforms"],
+      gmgnMinMcap: ["gmgn", "minMcap"],
+      gmgnMaxMcap: ["gmgn", "maxMcap"],
+      gmgnMinVolume: ["gmgn", "minVolume"],
+      gmgnMinHolders: ["gmgn", "minHolders"],
+      gmgnMinTokenAgeHours: ["gmgn", "minTokenAgeHours"],
+      gmgnMaxTokenAgeHours: ["gmgn", "maxTokenAgeHours"],
+      gmgnAthFilterPct: ["gmgn", "athFilterPct"],
+      gmgnMaxTop10HolderRate: ["gmgn", "maxTop10HolderRate"],
+      gmgnMaxBundlerRate: ["gmgn", "maxBundlerRate"],
+      gmgnMaxRatTraderRate: ["gmgn", "maxRatTraderRate"],
+      gmgnMaxFreshWalletRate: ["gmgn", "maxFreshWalletRate"],
+      gmgnMaxDevTeamHoldRate: ["gmgn", "maxDevTeamHoldRate"],
+      gmgnMaxBotDegenRate: ["gmgn", "maxBotDegenRate"],
+      gmgnMaxSniperCount: ["gmgn", "maxSniperCount"],
+      gmgnMaxSniperHoldRate: ["gmgn", "maxSniperHoldRate"],
+      gmgnPreferredKolNames: ["gmgn", "preferredKolNames"],
+      gmgnPreferredKolMinHoldPct: ["gmgn", "preferredKolMinHoldPct"],
+      gmgnDumpKolNames: ["gmgn", "dumpKolNames"],
+      gmgnDumpKolMinHoldPct: ["gmgn", "dumpKolMinHoldPct"],
+      gmgnRequireKol: ["gmgn", "requireKol"],
+      gmgnMinKolCount: ["gmgn", "minKolCount"],
+      gmgnMinSmartDegenCount: ["gmgn", "minSmartDegenCount"],
+      gmgnMinTotalFeeSol: ["gmgn", "minTotalFeeSol"],
+      gmgnIndicatorFilter: ["gmgn", "indicatorFilter"],
+      gmgnIndicatorInterval: ["gmgn", "indicatorInterval"],
+      gmgnRequireBullishSt: ["gmgn", "indicatorRules", "requireBullishSupertrend"],
+      gmgnRejectAtBottom: ["gmgn", "indicatorRules", "rejectAlreadyAtBottom"],
+      gmgnRequireAboveSt: ["gmgn", "indicatorRules", "requireAboveSupertrend"],
+      gmgnMinRsi: ["gmgn", "indicatorRules", "minRsi"],
+      gmgnMaxRsi: ["gmgn", "indicatorRules", "maxRsi"],
+      gmgnRequireBbPosition: ["gmgn", "indicatorRules", "requireBbPosition"],
       // chart indicators
       chartIndicatorsEnabled: ["indicators", "enabled", ["chartIndicators", "enabled"]],
       indicatorEntryPreset: ["indicators", "entryPreset", ["chartIndicators", "entryPreset"]],
@@ -400,30 +440,21 @@ const toolMap = {
     const CONFIG_MAP_LOWER = Object.fromEntries(
       Object.entries(CONFIG_MAP).map(([k, v]) => [k.toLowerCase(), [k, v]])
     );
-
-    if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
-      return { success: false, error: "changes must be an object", reason };
-    }
-
     const STRATEGY_BIN_KEYS = new Set(["binsBelow", "minBinsBelow", "maxBinsBelow", "defaultBinsBelow"]);
+
     for (const [key, val] of Object.entries(changes)) {
       const match = CONFIG_MAP[key] ? [key, CONFIG_MAP[key]] : CONFIG_MAP_LOWER[key.toLowerCase()];
       if (!match) { unknown.push(key); continue; }
-      try {
-        let normalizedVal = val;
-        if (STRATEGY_BIN_KEYS.has(match[0])) {
-          const numericVal = Number(val);
-          if (!Number.isFinite(numericVal)) {
-            throw new Error(`${match[0]} must be a finite number`);
-          }
-          normalizedVal = Math.max(MIN_SAFE_BINS_BELOW, Math.round(numericVal));
-        } else {
-          normalizedVal = normalizeConfigValue(match[0], val);
+      let normalizedVal = val;
+      if (STRATEGY_BIN_KEYS.has(match[0])) {
+        const numericVal = Number(val);
+        if (!Number.isFinite(numericVal)) {
+          unknown.push(key);
+          continue;
         }
-        applied[match[0]] = normalizedVal;
-      } catch (error) {
-        return { success: false, error: error.message, key: match[0], reason };
+        normalizedVal = Math.max(MIN_SAFE_BINS_BELOW, Math.round(numericVal));
       }
+      applied[match[0]] = normalizedVal;
     }
 
     if (Object.keys(applied).length === 0) {
@@ -431,21 +462,20 @@ const toolMap = {
       return { success: false, unknown, reason };
     }
 
-    let userConfig = {};
-    if (fs.existsSync(USER_CONFIG_PATH)) {
-      try {
-        userConfig = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
-      } catch (error) {
-        return { success: false, error: `Invalid user-config.json: ${error.message}`, reason };
-      }
-    }
-
-    // Apply to live config immediately after the persisted config is known-good.
+    // Apply to live config immediately
     for (const [key, val] of Object.entries(applied)) {
-      const [section, field] = CONFIG_MAP[key];
-      const before = config[section][field];
-      config[section][field] = val;
-      log("config", `update_config: config.${section}.${field} ${before} → ${val} (verify: ${config[section][field]})`);
+      const [section, field, third] = CONFIG_MAP[key];
+      const isNestedField = typeof third === "string"; // string = nested subfield, array = persistPath
+      if (isNestedField) {
+        if (!config[section][field] || typeof config[section][field] !== "object") config[section][field] = {};
+        const before = config[section][field][third];
+        config[section][field][third] = val;
+        log("config", `update_config: config.${section}.${field}.${third} ${redactConfigValue(key, before)} → ${redactConfigValue(key, val)}`);
+      } else {
+        const before = config[section][field];
+        config[section][field] = val;
+        log("config", `update_config: config.${section}.${field} ${redactConfigValue(key, before)} → ${redactConfigValue(key, val)} (verify: ${redactConfigValue(key, config[section][field])})`);
+      }
     }
     if (
       applied.binsBelow != null ||
@@ -464,8 +494,31 @@ const toolMap = {
       );
     }
 
+    // Persist GMGN tuning to gmgn-config.json, and everything else to user-config.json.
+    let userConfig = {};
+    if (fs.existsSync(USER_CONFIG_PATH)) {
+      try { userConfig = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8")); } catch { /**/ }
+    }
+    let gmgnConfig = {};
+    if (fs.existsSync(GMGN_CONFIG_PATH)) {
+      try { gmgnConfig = JSON.parse(fs.readFileSync(GMGN_CONFIG_PATH, "utf8")); } catch { /**/ }
+    }
+    let wroteUserConfig = false;
+    let wroteGmgnConfig = false;
     for (const [key, val] of Object.entries(applied)) {
-      const persistPath = CONFIG_MAP[key]?.[2];
+      const [section, field, third] = CONFIG_MAP[key] || [];
+      const persistPath = Array.isArray(third) ? third : null;
+      const nestedField = typeof third === "string" ? third : null;
+      if (section === "gmgn") {
+        if (nestedField) {
+          if (!gmgnConfig[field] || typeof gmgnConfig[field] !== "object") gmgnConfig[field] = {};
+          gmgnConfig[field][nestedField] = val;
+        } else {
+          gmgnConfig[field] = val;
+        }
+        wroteGmgnConfig = true;
+        continue;
+      }
       if (Array.isArray(persistPath) && persistPath.length > 0) {
         let target = userConfig;
         for (const part of persistPath.slice(0, -1)) {
@@ -478,9 +531,17 @@ const toolMap = {
       } else {
         userConfig[key] = val;
       }
+      wroteUserConfig = true;
     }
-    userConfig._lastAgentTune = new Date().toISOString();
-    fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
+    const tunedAt = new Date().toISOString();
+    if (wroteUserConfig) {
+      userConfig._lastAgentTune = tunedAt;
+      fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
+    }
+    if (wroteGmgnConfig) {
+      gmgnConfig._lastAgentTune = tunedAt;
+      fs.writeFileSync(GMGN_CONFIG_PATH, JSON.stringify(gmgnConfig, null, 2));
+    }
 
     // Restart cron jobs if intervals changed
     const intervalChanged = applied.managementIntervalMin != null || applied.screeningIntervalMin != null;
@@ -489,17 +550,19 @@ const toolMap = {
       log("config", `Cron restarted — management: ${config.schedule.managementIntervalMin}m, screening: ${config.schedule.screeningIntervalMin}m`);
     }
 
-    // Skip repeated volatility-driven interval changes; they are operational tuning, not reusable lessons.
+    // Save as a lesson — but skip ephemeral per-deploy interval changes
+    // (managementIntervalMin / screeningIntervalMin change every deploy based on volatility;
+    //  the rule is already in the system prompt, storing it 75+ times is pure noise)
     const lessonsKeys = Object.keys(applied).filter(
       k => k !== "managementIntervalMin" && k !== "screeningIntervalMin"
     );
     if (lessonsKeys.length > 0) {
-      const summary = lessonsKeys.map(k => `${k}=${applied[k]}`).join(", ");
+      const summary = lessonsKeys.map(k => `${k}=${redactConfigValue(k, applied[k])}`).join(", ");
       addLesson(`[SELF-TUNED] Changed ${summary} — ${reason}`, ["self_tune", "config_change"]);
     }
 
-    log("config", `Agent self-tuned: ${JSON.stringify(applied)} — ${reason}`);
-    return { success: true, applied, unknown, reason };
+    log("config", `Agent self-tuned: ${JSON.stringify(redactAppliedConfig(applied))} — ${reason}`);
+    return { success: true, applied: redactAppliedConfig(applied), unknown, reason };
   },
 };
 
@@ -640,15 +703,6 @@ async function runSafetyChecks(name, args) {
         };
       }
 
-      // Reject pools with volatility below minimum floor
-      const minVol = config.screening.minVolatility;
-      if (args.volatility != null && Number.isFinite(args.volatility) && args.volatility < minVol) {
-        return {
-          pass: false,
-          reason: `volatility ${args.volatility} is below minimum floor ${minVol}.`,
-        };
-      }
-
       const deployAmountY = Number(args.amount_y ?? args.amount_sol ?? 0);
       const deployAmountX = Number(args.amount_x ?? 0);
       if (Number.isFinite(deployAmountX) && deployAmountX > 0) {
@@ -669,21 +723,6 @@ async function runSafetyChecks(name, args) {
           reason: `volatility ${args.volatility} is invalid. Refusing deploy because the volatility feed is unusable.`,
         };
       }
-
-      // Auto-correct bins_below using vol formula — LLM often defaults to minBinsBelow.
-      // Formula: round(minBinsBelow + (vol/5) * (maxBinsBelow - minBinsBelow)), clamped.
-      // Only corrects upward — never narrows a wider range the LLM intentionally chose.
-      if (Number.isFinite(requestedVolatility) && requestedVolatility > 0) {
-        const minB = Math.max(MIN_SAFE_BINS_BELOW, Number(config.strategy.minBinsBelow ?? MIN_SAFE_BINS_BELOW));
-        const maxB = Math.max(minB, Number(config.strategy.maxBinsBelow ?? minB));
-        const formulaBins = Math.round(minB + (requestedVolatility / 5) * (maxB - minB));
-        const targetBins  = Math.max(minB, Math.min(maxB, formulaBins));
-        if (requestedBinsBelow < targetBins) {
-          log("safety", `bins_below auto-corrected ${requestedBinsBelow} → ${targetBins} (vol=${requestedVolatility}, formula=${formulaBins}, range=[${minB},${maxB}])`);
-          args.bins_below = targetBins;
-        }
-      }
-
       if (
         args.downside_pct == null &&
         args.upside_pct == null &&
@@ -755,8 +794,8 @@ async function runSafetyChecks(name, args) {
       }
 
       // Check amount limits
-      const amountY = deployAmountY;
-      if (!Number.isFinite(amountY) || amountY <= 0) {
+      const amountY = args.amount_y ?? args.amount_sol ?? 0;
+      if (amountY <= 0) {
         return {
           pass: false,
           reason: `Must provide a positive SOL amount (amount_y).`,

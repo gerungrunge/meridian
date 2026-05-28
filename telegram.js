@@ -101,9 +101,37 @@ async function postTelegram(method, body) {
   }
 }
 
+async function postTelegramRaw(method, body) {
+  if (!TOKEN) return null;
+  try {
+    const res = await fetch(`${BASE}/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
+      return null;
+    }
+    return await res.json();
+  } catch (e) {
+    log("telegram_error", `${method} failed: ${e.message}`);
+    return null;
+  }
+}
+
 export async function sendMessage(text) {
   if (!TOKEN || !chatId) return;
   return postTelegram("sendMessage", { text: String(text).slice(0, 4096) });
+}
+
+export async function sendMessageWithButtons(text, inlineKeyboard) {
+  if (!TOKEN || !chatId) return;
+  return postTelegram("sendMessage", {
+    text: String(text).slice(0, 4096),
+    reply_markup: { inline_keyboard: inlineKeyboard },
+  });
 }
 
 export async function sendHTML(html) {
@@ -111,85 +139,29 @@ export async function sendHTML(html) {
   return postTelegram("sendMessage", { text: html.slice(0, 4096), parse_mode: "HTML" });
 }
 
-// Dedupe cache: skip editMessageText calls when the new text exactly matches the
-// last text we sent for the same message_id. Telegram returns 400 "message is not
-// modified" otherwise, which spams logs.
-const _lastEditTextByMessageId = new Map();
-
 export async function editMessage(text, messageId) {
   if (!TOKEN || !chatId || !messageId) return null;
-  const truncated = String(text).slice(0, 4096);
-  const cached = _lastEditTextByMessageId.get(messageId);
-  if (cached === truncated) return null;
-  _lastEditTextByMessageId.set(messageId, truncated);
-  // Cap cache to last 100 messages to bound memory
-  if (_lastEditTextByMessageId.size > 100) {
-    const firstKey = _lastEditTextByMessageId.keys().next().value;
-    _lastEditTextByMessageId.delete(firstKey);
-  }
   return postTelegram("editMessageText", {
     message_id: messageId,
-    text: truncated,
-  });
-}
-
-// ─── Inline-keyboard helpers ──────────────────────────────────────
-// `keyboard` is an array of rows; each row is an array of buttons
-// produced by something like `{ text: "Label", callback_data: "data" }`.
-
-function normalizeKeyboard(keyboard) {
-  if (!Array.isArray(keyboard)) return null;
-  return { inline_keyboard: keyboard };
-}
-
-export async function sendMessageWithButtons(text, keyboard) {
-  if (!TOKEN || !chatId) return null;
-  const reply_markup = normalizeKeyboard(keyboard);
-  return postTelegram("sendMessage", {
     text: String(text).slice(0, 4096),
-    parse_mode: "HTML",
-    ...(reply_markup ? { reply_markup } : {}),
   });
 }
 
-export async function editMessageWithButtons(text, messageId, keyboard) {
+export async function editMessageWithButtons(text, messageId, inlineKeyboard) {
   if (!TOKEN || !chatId || !messageId) return null;
-  const truncated = String(text).slice(0, 4096);
-  const reply_markup = normalizeKeyboard(keyboard);
-  // Bypass dedupe cache because keyboard layout may change while text stays same.
-  _lastEditTextByMessageId.set(messageId, truncated);
   return postTelegram("editMessageText", {
     message_id: messageId,
-    text: truncated,
-    parse_mode: "HTML",
-    ...(reply_markup ? { reply_markup } : {}),
+    text: String(text).slice(0, 4096),
+    reply_markup: { inline_keyboard: inlineKeyboard },
   });
 }
 
 export async function answerCallbackQuery(callbackQueryId, text = "") {
   if (!TOKEN || !callbackQueryId) return null;
-  const payload = { callback_query_id: callbackQueryId };
-  if (text) {
-    payload.text = String(text).slice(0, 200);
-    payload.show_alert = false;
-  }
-  // Use raw fetch — postTelegram routes through chat_id which callback API doesn't take.
-  try {
-    const res = await fetch(`${BASE}/answerCallbackQuery`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      log("telegram_error", `answerCallbackQuery ${res.status}: ${body.slice(0, 200)}`);
-      return null;
-    }
-    return await res.json();
-  } catch (e) {
-    log("telegram_error", `answerCallbackQuery failed: ${e.message}`);
-    return null;
-  }
+  return postTelegramRaw("answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    ...(text ? { text: String(text).slice(0, 200) } : {}),
+  });
 }
 
 export function hasActiveLiveMessage() {
@@ -382,28 +354,23 @@ async function poll(onMessage) {
       const data = await res.json();
       for (const update of data.result || []) {
         _offset = update.update_id + 1;
-
-        // Inline-button click → dispatch as synthetic message with callback fields
-        if (update.callback_query) {
-          const cq = update.callback_query;
-          const synthetic = {
-            chat: cq.message?.chat,
-            from: cq.from,
-            text: cq.data || "",        // callback_data — index.js parses this
-            callbackQueryId: cq.id,
-            messageId: cq.message?.message_id,
-            callbackData: cq.data || "",
-            isCallback: true,
+        const callback = update.callback_query;
+        if (callback?.data && callback?.message) {
+          const callbackMsg = {
+            chat: callback.message.chat,
+            from: callback.from,
+            text: callback.data,
           };
-          if (!isAuthorizedIncomingMessage(synthetic)) {
-            // Still acknowledge so Telegram client stops spinning
-            await answerCallbackQuery(cq.id).catch(() => {});
-            continue;
-          }
-          await onMessage(synthetic);
+          if (!isAuthorizedIncomingMessage(callbackMsg)) continue;
+          await onMessage({
+            ...callbackMsg,
+            isCallback: true,
+            callbackQueryId: callback.id,
+            callbackData: callback.data,
+            messageId: callback.message.message_id,
+          });
           continue;
         }
-
         const msg = update.message;
         if (!msg?.text) continue;
         if (!isAuthorizedIncomingMessage(msg)) continue;
@@ -418,10 +385,47 @@ async function poll(onMessage) {
   }
 }
 
+const BOT_COMMANDS = [
+  { command: "help",       description: "Show commands" },
+  { command: "status",     description: "Wallet + positions snapshot" },
+  { command: "wallet",     description: "Wallet, deploy amount, HiveMind status" },
+  { command: "positions",  description: "List open positions" },
+  { command: "pool",       description: "Detailed info for one open position" },
+  { command: "close",      description: "Close one position by index" },
+  { command: "closeall",   description: "Close all open positions" },
+  { command: "set",        description: "Set note/instruction on position" },
+  { command: "config",     description: "Show important runtime config" },
+  { command: "settings",   description: "Button menu for common config" },
+  { command: "setcfg",     description: "Update persisted config key" },
+  { command: "screen",     description: "Refresh deterministic candidate list" },
+  { command: "candidates", description: "Show latest cached candidates" },
+  { command: "deploy",     description: "Deploy candidate by cached index" },
+  { command: "briefing",   description: "Morning briefing" },
+  { command: "hive",       description: "HiveMind sync status" },
+  { command: "pause",      description: "Stop cron cycles" },
+  { command: "resume",     description: "Start cron cycles again" },
+  { command: "stop",       description: "Shut down agent" },
+];
+
+async function registerCommands() {
+  if (!BASE) return;
+  try {
+    await fetch(`${BASE}/setMyCommands`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commands: BOT_COMMANDS }),
+    });
+    log("telegram", "Bot commands registered");
+  } catch (e) {
+    log("telegram_warn", `Failed to register bot commands: ${e.message}`);
+  }
+}
+
 export function startPolling(onMessage) {
   if (!TOKEN) return;
   _polling = true;
   poll(onMessage); // fire-and-forget
+  registerCommands();
   log("telegram", "Bot polling started");
 }
 
