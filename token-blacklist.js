@@ -29,6 +29,7 @@ function save(data) {
 // Add mints here only for proven rug/loss tokens. Keep small.
 const PERMANENT_BLACKLIST = new Set([
   "6AVAUKa9uxQpruHZUinFECpXEh1usRVtzQWK8N2wpump", // SCAM-SOL: 2 deploys, -$5.45 (R13)
+  "CMButZqQKoRabRAwemmG9gpXKa62KpQByLwjQLbjM1US", // SAOS-SOL: impersonator rug, -$22.52 in 39min (2026-05-28)
 ]);
 
 // ─── Check ─────────────────────────────────────────────────────
