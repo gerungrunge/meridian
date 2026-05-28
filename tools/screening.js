@@ -465,6 +465,7 @@ export async function getTopCandidates({ limit = 10 } = {}) {
         eligible[i].suspicious_pct  = adv.suspicious_pct;
         eligible[i].smart_money_buy = adv.smart_money_buy;
         eligible[i].dev_sold_all    = adv.dev_sold_all;
+        eligible[i].is_honeypot     = adv.is_honeypot;
         eligible[i].dex_boost       = adv.dex_boost;
         eligible[i].dex_screener_paid = adv.dex_screener_paid;
         if (adv.creator && !eligible[i].dev) eligible[i].dev = adv.creator;
@@ -489,6 +490,36 @@ export async function getTopCandidates({ limit = 10 } = {}) {
       if (p.is_wash) {
         log("screening", `Risk filter: dropped ${p.name} — wash trading flagged`);
         pushFilteredReason(filteredOut, p, "wash trading flagged");
+        return false;
+      }
+      return true;
+    }));
+
+    // Honeypot hard filter — token cannot be sold (buyer trapped)
+    eligible.splice(0, eligible.length, ...eligible.filter((p) => {
+      if (p.is_honeypot) {
+        log("screening", `Risk filter: dropped ${p.name} — honeypot token`);
+        pushFilteredReason(filteredOut, p, "honeypot token");
+        return false;
+      }
+      return true;
+    }));
+
+    // Rugpull hard filter — liquidity removal detected
+    eligible.splice(0, eligible.length, ...eligible.filter((p) => {
+      if (p.is_rugpull) {
+        log("screening", `Risk filter: dropped ${p.name} — rugpull flagged`);
+        pushFilteredReason(filteredOut, p, "rugpull flagged");
+        return false;
+      }
+      return true;
+    }));
+
+    // Dev sold-all hard filter — dev drained liquidity
+    eligible.splice(0, eligible.length, ...eligible.filter((p) => {
+      if (p.dev_sold_all) {
+        log("screening", `Risk filter: dropped ${p.name} — dev sold all`);
+        pushFilteredReason(filteredOut, p, "dev sold all");
         return false;
       }
       return true;

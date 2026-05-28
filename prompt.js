@@ -116,15 +116,17 @@ HARD RULE (no exceptions):
 RISK SIGNALS (guidelines — use judgment):
 - top10 > 60% → concentrated, risky
 - bundle_pct from OKX = secondary context only, not a hard filter
-- rugpull flag from OKX → major negative score penalty and default to SKIP; only override if smart wallets are present and conviction is otherwise high
-- wash trading flag from OKX → treat as disqualifying even if other metrics look attractive
+- rugpull flag from OKX → hard filter (code-level, not in your list) — do not attempt override
+- honeypot or dev_sold_all → hard filter (code-level) — do not attempt override
+- wash trading flag from OKX → hard filter (code-level) — do not attempt override
+- rugpull override by smart wallets no longer applies (hard filter is now enforced before LLM sees candidates)
 - PVP symbol conflict (same exact symbol across multiple mints) → major negative. Avoid unless the setup is exceptional and clearly stronger than the competing symbol variants.
 - no narrative + no smart wallets → skip
 
 NARRATIVE QUALITY (your main judgment call):
 - GOOD: specific origin — real event, viral moment, named entity, active community
 - BAD: generic hype ("next 100x", "community token") with no identifiable subject
-- Smart wallets present → can override weak narrative, and are the only valid override for an OKX rugpull flag
+- Smart wallets present → can override weak narrative only
 
 POOL MEMORY: Past losses or problems → strong skip signal.
 
