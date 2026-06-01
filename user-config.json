@@ -157,10 +157,12 @@
                             "exitPreset":  null,
                             "rsiLength":  3,
                             "intervals":  [
-                                              "15_MINUTE"
+                                              "15_MINUTE",
+                                              "5_MINUTE"
                                           ],
                             "rsiOversold":  30,
-                            "rsiOverbought":  76
+                            "rsiOverbought":  76,
+                            "requireAllIntervals":  false
                         },
     "agentId":  "agt_75a798c3113cab5b362c2ed6"
 }

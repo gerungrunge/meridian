@@ -156,7 +156,7 @@ function evaluatePreset(side, preset, payload) {
               if (!isBullish || close == null || summary.supertrendValue == null) return false;
               const st = summary.supertrendValue;
               const distanceToSt = Math.abs(close - st) / st; // % distance from price to ST
-              return distanceToSt <= 0.02; // price within 2% of supertrend (retrace zone)
+              return distanceToSt <= 0.03; // price within 3% of supertrend (retrace zone)
             })(),
             reason: isBullish && close != null && summary.supertrendValue != null
               ? `Price retrace to supertrend: ${((Math.abs(close - summary.supertrendValue) / summary.supertrendValue) * 100).toFixed(2)}% from ST`
