@@ -95,6 +95,9 @@
     "minTokenAgeHours":  2,
     "maxTokenAgeHours":  2160,
     "athFilterPct":  0,
+    "athMcapFloor":  250000,
+    "athRecencyHours":  24,
+    "screeningSource":  "gmgn",
     "maxVolatility":  12,
     "minVolatility":  1.5,
     "volatilityCompensateBinStep":  125,
@@ -150,11 +153,11 @@
     "agentMeridianApiUrl":  "https://api.agentmeridian.xyz/api",
     "chartIndicators":  {
                             "enabled":  true,
-                            "entryPreset":  "supertrend_or_rsi",
+                            "entryPreset":  "supertrend_retrace",
                             "exitPreset":  null,
                             "rsiLength":  3,
                             "intervals":  [
-                                              "5_MINUTE"
+                                              "15_MINUTE"
                                           ],
                             "rsiOversold":  30,
                             "rsiOverbought":  76
