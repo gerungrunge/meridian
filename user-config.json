@@ -137,7 +137,7 @@
     "temperature":  0.15,
     "maxTokens":  4096,
     "maxSteps":  8,
-    "managementModel":  "MiniMax-M2.5",
+    "managementModel":  "MiniMax-M2.7",
     "screeningModel":  "MiniMax-M2.7-highspeed",
     "generalModel":  "MiniMax-M3",
     "darwinEnabled":  true,
