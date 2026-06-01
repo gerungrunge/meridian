@@ -153,7 +153,7 @@
     "agentMeridianApiUrl":  "https://api.agentmeridian.xyz/api",
     "chartIndicators":  {
                             "enabled":  true,
-                            "entryPreset":  "supertrend_retrace",
+                            "entryPreset":  "supertrend_or_rsi",
                             "exitPreset":  null,
                             "rsiLength":  3,
                             "intervals":  [
