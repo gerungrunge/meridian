@@ -136,7 +136,7 @@
     "healthCheckIntervalMin":  30,
     "temperature":  0.15,
     "maxTokens":  4096,
-    "maxSteps":  18,
+    "maxSteps":  8,
     "managementModel":  "MiniMax-M2.5",
     "screeningModel":  "MiniMax-M2.5",
     "generalModel":  "MiniMax-M2.7",
