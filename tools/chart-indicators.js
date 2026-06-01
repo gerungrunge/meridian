@@ -146,6 +146,28 @@ function evaluatePreset(side, preset, payload) {
             reason: "Supertrend bearish confirmation or RSI overbought",
             signal: summary,
           };
+    case "supertrend_retrace":
+      // Entry: price was above ST, now pulling back TO the ST line (mean reversion in uptrend)
+      // Confirmed if: bullish ST, price dropped within 2% of ST value (retrace to support)
+      // Exit: price breaks below ST (trend reversal)
+      return side === "entry"
+        ? {
+            confirmed: (() => {
+              if (!isBullish || close == null || summary.supertrendValue == null) return false;
+              const st = summary.supertrendValue;
+              const distanceToSt = Math.abs(close - st) / st; // % distance from price to ST
+              return distanceToSt <= 0.02; // price within 2% of supertrend (retrace zone)
+            })(),
+            reason: isBullish && close != null && summary.supertrendValue != null
+              ? `Price retrace to supertrend: ${((Math.abs(close - summary.supertrendValue) / summary.supertrendValue) * 100).toFixed(2)}% from ST`
+              : "Not in supertrend retrace zone",
+            signal: summary,
+          }
+        : {
+            confirmed: summary.supertrendBreakDown || (isBearish && close != null && summary.supertrendValue != null && close <= summary.supertrendValue),
+            reason: summary.supertrendBreakDown ? "Supertrend flipped bearish" : "Price below bearish Supertrend",
+            signal: summary,
+          };
     case "bb_plus_rsi":
       return side === "entry"
         ? {

@@ -108,6 +108,13 @@ export const config = {
     minTokenAgeHours:   u.minTokenAgeHours   ?? null, // null = no minimum
     maxTokenAgeHours:   u.maxTokenAgeHours   ?? null, // null = no maximum
     athFilterPct:       u.athFilterPct       ?? null, // e.g. -20 = only deploy if price is >= 20% below ATH
+    athMcapFloor:       u.athMcapFloor       ?? 250_000, // min mcap when token is at ATH (new ATH breakout)
+    athRecencyHours:    u.athRecencyHours    ?? 24,   // max age of ATH to be considered "new"
+    minHolders:        u.minHolders        ?? 300,   // loosened for new ATH-breakout edge
+    minVolume:         u.minVolume         ?? 200,    // loosened
+    minQuoteOrganic:   u.minQuoteOrganic   ?? 45,     // loosened
+    maxTvl:            u.maxTvl            ?? null,   // removed cap — ATH-breakout tokens can be small
+    maxMcap:           u.maxMcap           ?? 20_000_000, // widened for mid-cap breakouts
   },
 
   gmgn: {

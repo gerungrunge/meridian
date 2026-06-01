@@ -757,6 +757,24 @@ export async function getTopCandidates({ limit = 10 } = {}) {
       if (eligible.length < before) log("screening", `ATH filter removed ${before - eligible.length} pool(s)`);
     }
 
+    // New edge: ATH mcap floor — only deploy when token is at new ATH with sufficient mcap
+    const athMcapFloor = config.screening.athMcapFloor;
+    if (athMcapFloor != null && athMcapFloor > 0) {
+      const before = eligible.length;
+      eligible.splice(0, eligible.length, ...eligible.filter((p) => {
+        // Only apply if price is at/near ATH (>= 99%)
+        if (p.price_vs_ath_pct == null || p.price_vs_ath_pct < 99) return true;
+        const currentMcap = p.mcap ?? p.base?.mcap ?? 0;
+        if (currentMcap < athMcapFloor) {
+          log("screening", `ATH mcap filter: dropped ${p.name} — mcap ${currentMcap.toFixed(0)} below athMcapFloor ${athMcapFloor}`);
+          pushFilteredReason(filteredOut, p, `ATH mcap ${currentMcap.toFixed(0)} < ${athMcapFloor}`);
+          return false;
+        }
+        return true;
+      }));
+      if (eligible.length < before) log("screening", `ATH mcap floor filter removed ${before - eligible.length} pool(s)`);
+    }
+
     // Drop any pools whose creator is on the dev blocklist (caught via advanced-info)
     const before = eligible.length;
     const filtered = eligible.filter((p) => {
