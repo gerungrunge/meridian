@@ -139,7 +139,7 @@
     "maxSteps":  8,
     "managementModel":  "MiniMax-M2.5",
     "screeningModel":  "MiniMax-M2.7-highspeed",
-    "generalModel":  "MiniMax-M2.7",
+    "generalModel":  "MiniMax-M3",
     "darwinEnabled":  true,
     "darwinWindowDays":  30,
     "darwinRecalcEvery":  3,
