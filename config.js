@@ -203,6 +203,13 @@ export const config = {
     trailingTakeProfit:    u.trailingTakeProfit    ?? true,
     trailingTriggerPct:    u.trailingTriggerPct    ?? 3,    // activate trailing at X% PnL
     trailingDropPct:       u.trailingDropPct       ?? 1.5,  // close when drops X% from peak
+    // Trailing guards — require position to mature before trailing TP can arm.
+    // Prevents activating on initial spike-then-fade patterns (e.g. peak 0.5%
+    // at minute 2 then crash). trailingTriggerPct is the real activation
+    // threshold; minHoldMinutesForTrail and minPeakPctForTrail are sanity
+    // floors that gate it.
+    minHoldMinutesForTrail: u.minHoldMinutesForTrail ?? 30,  // position must be held X min before trail can arm
+    minPeakPctForTrail:     u.minPeakPctForTrail     ?? 1.5, // peak PnL must exceed X% before trail can arm (soft floor below trailingTriggerPct)
     pnlSanityMaxDiffPct:   u.pnlSanityMaxDiffPct   ?? 5,    // max allowed diff between reported and derived pnl % before ignoring a tick
     // SOL mode — positions, PnL, and balances reported in SOL instead of USD
     solMode:               u.solMode               ?? false,

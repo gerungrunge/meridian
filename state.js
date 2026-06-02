@@ -416,11 +416,27 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
 
   let changed = false;
 
-  // Activate trailing TP once trigger threshold is reached
+  // Activate trailing TP once trigger threshold is reached.
+  // Guards: position must be held for at least minHoldMinutesForTrail minutes
+  // and peak PnL must exceed minPeakPctForTrail before the trailingTriggerPct
+  // gate applies. Prevents arming on initial spike-then-fade patterns.
   if (mgmtConfig.trailingTakeProfit && !pos.trailing_active && (pos.peak_pnl_pct ?? 0) >= mgmtConfig.trailingTriggerPct) {
-    pos.trailing_active = true;
-    changed = true;
-    log("state", `Position ${position_address} trailing TP activated (confirmed peak: ${pos.peak_pnl_pct}%)`);
+    const minHoldMinutes = Number(mgmtConfig.minHoldMinutesForTrail ?? 0);
+    const minPeakPct = Number(mgmtConfig.minPeakPctForTrail ?? 0);
+    const peakNow = pos.peak_pnl_pct ?? 0;
+    const peakOk = peakNow >= minPeakPct;
+    const deployedAt = pos.deployed_at ? new Date(pos.deployed_at).getTime() : 0;
+    const heldMinutes = deployedAt > 0 ? (Date.now() - deployedAt) / 60000 : Infinity;
+    const holdOk = heldMinutes >= minHoldMinutes;
+
+    if (peakOk && holdOk) {
+      pos.trailing_active = true;
+      pos.trailing_activated_at = new Date().toISOString();
+      changed = true;
+      log("state", `Position ${position_address} trailing TP activated (peak: ${peakNow}%, held: ${heldMinutes.toFixed(0)}m >= ${minHoldMinutes}m)`);
+    } else {
+      log("state_debug", `Position ${position_address} trailing TP pending: peak ${peakNow}% (need >= ${minPeakPct}%) | held ${heldMinutes.toFixed(0)}m (need >= ${minHoldMinutes}m)`);
+    }
   }
 
   // Update OOR state
