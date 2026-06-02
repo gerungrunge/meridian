@@ -12,6 +12,7 @@ import { formatGmgnCandidateForPrompt } from "./tools/gmgn.js";
 import { config, reloadScreeningThresholds, computeDeployAmount } from "./config.js";
 import { evolveThresholds, getPerformanceSummary } from "./lessons.js";
 import { cleanStaleLessons } from "./scripts/clean-stale-lessons.js";
+import { autoTrackSmartWallets } from "./scripts/auto-track-smart-wallets.js";
 import { executeTool, registerCronRestarter } from "./tools/executor.js";
 import {
   startPolling,
@@ -52,6 +53,7 @@ if (isMain) {
   } catch (error) {
     log("bootstrap_warn", `clean-stale-lessons failed: ${error.message}`);
   }
+  autoTrackSmartWallets().catch((error) => log("bootstrap_warn", `auto-track-smart-wallets failed: ${error.message}`));
   bootstrapHiveMind().catch((error) => log("hivemind_warn", `Bootstrap failed: ${error.message}`));
   startHiveMindBackgroundSync();
 }
@@ -804,6 +806,16 @@ Summarize the current portfolio health, total fees earned, and performance of al
   // Every 6h — catch up if briefing was missed (agent restart, crash, etc.)
   const briefingWatchdog = cron.schedule(`0 */6 * * *`, async () => {
     await maybeRunMissedBriefing();
+  }, { timezone: 'UTC' });
+
+  // Daily 02:00 UTC — auto-track smart wallets from LPAgent top-LP studies.
+  // Runs after the 01:00 briefing so daily stats are settled.
+  const autoTrackTask = cron.schedule(`0 2 * * *`, async () => {
+    try {
+      await autoTrackSmartWallets();
+    } catch (error) {
+      log("cron_warn", `auto-track-smart-wallets failed: ${error.message}`);
+    }
   }, { timezone: 'UTC' });
 
   // Lightweight 30s PnL poller — updates trailing TP state between management cycles, no LLM
