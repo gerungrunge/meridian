@@ -1,17 +1,21 @@
 /**
- * One-shot bootstrap cleanup for stale/over-strict lessons.
+ * Bootstrap cleanup for stale/over-strict lessons.
  *
- * Background: lessons.json can accumulate AUTO-EVOLVED entries (from
+ * Background: lessons.json accumulates AUTO-EVOLVED entries (from
  * lessons.js evolveThresholds) that misinterpret historical loser
  * distributions as rejection thresholds (e.g. "Losers clustered at
  * volatility ~0.7" → LLM rejects all vol < 0.7, ignoring the config).
  *
- * This script runs once on container startup, removes the harmful
- * AUTO-EVOLVED and ZECK-SOL FAILED entries, and inserts a pinned
- * anchor lesson telling the SCREENER to defer to current config values.
+ * This script runs on every container startup, strips the harmful
+ * AUTO-EVOLVED and ZECK-SOL FAILED entries, and ensures a pinned
+ * anchor lesson is present telling the SCREENER to defer to current
+ * config values.
  *
- * Idempotent: tagged with `_bootstrap_clean_v1` — if the anchor is
- * already present, the script is a no-op.
+ * Idempotency:
+ *   - AUTO-EVOLVED / ZECK-SOL removal happens every restart
+ *     (bot re-adds them via evolveThresholds on every 5 closes)
+ *   - Anchor lesson is added once and kept across restarts
+ *     (gated by `_bootstrap_clean_v1` marker tag)
  */
 
 import fs from "fs";
@@ -50,45 +54,48 @@ function save(data) {
 export function cleanStaleLessons() {
   const data = load();
 
-  const alreadyCleaned = data.lessons.some(
-    (l) => Array.isArray(l.tags) && l.tags.includes(BOOTSTRAP_TAG),
-  );
-  if (alreadyCleaned) {
-    log("bootstrap", "clean-stale-lessons: already applied, skipping");
-    return { skipped: true, reason: "marker present" };
-  }
-
   const before = data.lessons.length;
+  // Always strip over-strict noise on every startup — these get re-added
+  // by evolveThresholds() on every 5 closes, so a one-shot cleanup is not enough.
   data.lessons = data.lessons.filter((l) => !String(l.rule || "").includes("AUTO-EVOLVED"));
   const afterAuto = data.lessons.length;
   data.lessons = data.lessons.filter((l) => !String(l.rule || "").includes("ZECK-SOL"));
   const afterZeck = data.lessons.length;
 
-  data.lessons.push({
-    id: Date.now(),
-    rule: ANCHOR_RULE,
-    tags: ["screening", "config_change", "self_tune", BOOTSTRAP_TAG],
-    outcome: "manual",
-    sourceType: "config_change",
-    pinned: true,
-    role: "SCREENER",
-    created_at: new Date().toISOString(),
-  });
-
-  save(data);
+  // Anchor lesson is added only once (gated by marker tag).
+  const hasAnchor = data.lessons.some(
+    (l) => Array.isArray(l.tags) && l.tags.includes(BOOTSTRAP_TAG),
+  );
+  let anchorAdded = 0;
+  if (!hasAnchor) {
+    data.lessons.push({
+      id: Date.now(),
+      rule: ANCHOR_RULE,
+      tags: ["screening", "config_change", "self_tune", BOOTSTRAP_TAG],
+      outcome: "manual",
+      sourceType: "config_change",
+      pinned: true,
+      role: "SCREENER",
+      created_at: new Date().toISOString(),
+    });
+    anchorAdded = 1;
+  }
 
   const removed = {
     auto_evolved: before - afterAuto,
     zeck_sol: afterAuto - afterZeck,
-    anchor_added: 1,
+    anchor_added: anchorAdded,
   };
+  const changed = removed.auto_evolved + removed.zeck_sol + removed.anchor_added > 0;
+  if (changed) save(data);
+
   log(
     "bootstrap",
     `clean-stale-lessons: removed ${removed.auto_evolved} AUTO-EVOLVED, ` +
-      `${removed.zeck_sol} ZECK-SOL; added pinned anchor (role=SCREENER); ` +
+      `${removed.zeck_sol} ZECK-SOL; anchor ${anchorAdded ? "added" : "kept"}; ` +
       `total ${before} → ${data.lessons.length}`,
   );
-  return { skipped: false, removed, totalBefore: before, totalAfter: data.lessons.length };
+  return { removed, totalBefore: before, totalAfter: data.lessons.length };
 }
 
 if (
