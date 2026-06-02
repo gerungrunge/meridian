@@ -7,6 +7,8 @@
                        "perf_s4parallel":  "tools/gmgn.js Stage 4 — for/await loop → Promise.allSettled. tools/chart-indicators.js fetchChartIndicatorsForMint — added AbortController with 8s timeoutMs default",
                        "_note_perf_apitmo":  "2026-06-02 Meridian API chart-indicators endpoint down/overloaded. Tested: 350ms baseline ping Asia→EU (5.189.143.6), chart-indicators endpoint times out at 12s+ for all candle counts and intervals. Bot's 298 DEFAULT_CANDLES was worst case. Two-line fix: disable indicatorFilter in gmgn-config (skip Stage 4 entirely), reduce candles 298→50 in chartIndicators for when API recovers. LLM still has confirmIndicatorPreset tool as fallback.",
                        "perf_apitmo_disabled":  "user-config.json chartIndicators.enabled: true → false. confirmIndicatorPreset returns immediately when disabled (no API call), saving 2× 8s timeouts per LLM decision cycle. Re-enable when API recovers.",
+                       "_note_r14":  "2026-06-02 decision-log analysis: 3/6 recent no_deploy cycles were single-candidate LLM rejections with reason `bot_holders_pct X% > 24%` (Jupiter audit metric, distinct from GMGN bot_degen_rate). DATBIHGAH 31.3%, Berries 36.3% — all genuine market tokens, just Jupiter's bot count is broad. 24 was over-tightened below config.js default 30. Raised to 40 to align with GMGN maxBotDegenRate 0.4 — gives LLM breathing room without admitting rug territory (60%+).",
+                       "r14_bot_holders":  "maxBotHoldersPct: 24 → 40 — Jupiter bot_holders_pct threshold; GMGN bot_degen_rate filter at 0.4 stays as upstream hard reject for worst cases",
                        "perf_apitmo_filter":  "gmgn-config.json indicatorFilter: true → false. user-config.json gmgnIndicatorFilter: false (fallback when gmgn-config.json absent on Dokploy). Skip Stage 4 chart-indicators call entirely; GMGN funnel still filters for bullish supertrend upstream via requireBullishSupertrend: true",
                        "perf_apitmo_candles":  "user-config.json chartIndicators.candles: 298 (DEFAULT) → 50 — prevents 30s timeout if LLM calls confirmIndicatorPreset; 50 candles = 12.5h of 15-min data, plenty for supertrend",
                        "_note_lossfix":  "2026-05-25 Stake-SOL analysis: 6h close at -$1.40 left $8.30 unclaimed fees on table; ALL winners cut at 0.01-3.38% by too-tight trailing. Root cause: positionSizePct=0.90 deployed 0.70 SOL single position — one loss hits hard, trailing fires at 1.5% drop on large position, winners can't compound. Fix: smaller positions + wider trail + looser stop.",
@@ -93,7 +95,7 @@
     "avoidPvpSymbols":  true,
     "blockPvpSymbols":  true,
     "maxBundlePct":  18,
-    "maxBotHoldersPct":  24,
+    "maxBotHoldersPct":  40,
     "maxTop10Pct":  60,
     "allowedLaunchpads":  [
 
