@@ -301,6 +301,66 @@ function analyzeHoldersAndTraders(holders = [], traders = []) {
   };
 }
 
+function analyzeTokenSecurity(security = {}) {
+  const g = config.gmgn;
+  const isHoneypot = boolish(security.is_honeypot);
+  const ownerRenounced = boolish(security.owner_renounced);
+  const renouncedMint = boolish(security.renounced_mint);
+  const renouncedFreeze = boolish(security.renounced_freeze_account);
+  const openSource = boolish(security.open_source);
+  const buyTax = num(security.buy_tax);
+  const sellTax = num(security.sell_tax);
+  const rugRatio = num(security.rug_ratio);
+  const top10 = num(security.top_10_holder_rate);
+  const sniperCount = num(security.sniper_count);
+  const transferTax = num(security.transfer_tax);
+
+  const maxBuyTax = num(g.maxBuyTaxPct ?? 10);
+  const maxSellTax = num(g.maxSellTaxPct ?? 10);
+  const maxRugRatio = num(g.maxRugRatio ?? 0.3);
+  const maxSniperCount = Number.isFinite(Number(g.maxSniperCount)) ? Number(g.maxSniperCount) : 20;
+  const requireRenouncedOwner = g.requireRenouncedOwner === true;
+  const requireRenouncedMint = g.requireRenouncedMint === true;
+  const requireRenouncedFreeze = g.requireRenouncedFreezeAccount === true;
+
+  const reasons = [];
+  const warnings = [];
+  if (isHoneypot) reasons.push("honeypot");
+  if (Number.isFinite(rugRatio) && rugRatio > maxRugRatio) reasons.push(`rug_ratio ${(rugRatio * 100).toFixed(0)}% > ${(maxRugRatio * 100).toFixed(0)}%`);
+  if (Number.isFinite(buyTax) && buyTax > maxBuyTax) reasons.push(`buy_tax ${buyTax}% > ${maxBuyTax}%`);
+  if (Number.isFinite(sellTax) && sellTax > maxSellTax) reasons.push(`sell_tax ${sellTax}% > ${maxSellTax}%`);
+  if (Number.isFinite(sniperCount) && sniperCount > maxSniperCount) reasons.push(`sniper_count ${sniperCount} > ${maxSniperCount}`);
+  if (requireRenouncedOwner && !ownerRenounced) reasons.push("owner not renounced");
+  if (requireRenouncedMint && !renouncedMint) reasons.push("mint authority not renounced");
+  if (requireRenouncedFreeze && !renouncedFreeze) reasons.push("freeze authority not renounced");
+
+  if (Number.isFinite(rugRatio) && rugRatio > 0 && rugRatio <= maxRugRatio) warnings.push(`rug_ratio ${(rugRatio * 100).toFixed(0)}% (within tolerance)`);
+  if (!ownerRenounced) warnings.push("owner not renounced");
+  if (!renouncedMint) warnings.push("mint authority not renounced");
+  if (!renouncedFreeze) warnings.push("freeze authority not renounced");
+  if (!openSource) warnings.push("not open source");
+  if (Number.isFinite(transferTax) && transferTax > 0) warnings.push(`transfer_tax ${transferTax}%`);
+
+  return {
+    passed: reasons.length === 0,
+    hardRejected: isHoneypot,
+    reasons,
+    warnings,
+    isHoneypot,
+    ownerRenounced,
+    renouncedMint,
+    renouncedFreeze,
+    openSource,
+    buyTaxPct: Number.isFinite(buyTax) ? buyTax : null,
+    sellTaxPct: Number.isFinite(sellTax) ? sellTax : null,
+    transferTaxPct: Number.isFinite(transferTax) ? transferTax : null,
+    rugRatioPct: Number.isFinite(rugRatio) ? Number((rugRatio * 100).toFixed(2)) : null,
+    top10HolderPct: Number.isFinite(top10) ? Number((top10 * 100).toFixed(2)) : null,
+    sniperCount: Number.isFinite(sniperCount) ? sniperCount : null,
+  };
+}
+
+
 
 async function fetchTopMeteoraDlmmPoolsForMint(mint, minTvl = 0, limit = 2) {
   const filterBy = minTvl > 0 ? `&filter_by=${encodeURIComponent(`tvl>${minTvl}`)}` : "";
@@ -353,7 +413,7 @@ async function pickBestPool(pools) {
   return { pool: scored[0].pool, detail: scored[0].detail };
 }
 
-function condenseGmgnCandidate({ token, pool, poolDetail, security, info, infoAnalysis, holdersAnalysis, indicatorSignal }) {
+function condenseGmgnCandidate({ token, pool, poolDetail, security, securityCheck, info, infoAnalysis, holdersAnalysis, indicatorSignal }) {
   const poolAddress = pool.address || pool.pool_address;
   // Stage 5 Pool Discovery provides active_tvl and fee_active_tvl_ratio
   // Stage 3 Meteora search provides tvl and bin_step/base_fee_pct via pool_config
@@ -433,6 +493,16 @@ function condenseGmgnCandidate({ token, pool, poolDetail, security, info, infoAn
     gmgn_whale_wallets: infoAnalysis?.whaleWallets ?? null,
     gmgn_fresh_wallets: infoAnalysis?.freshWallets ?? null,
     gmgn_sniper_count: num(security?.sniper_count ?? token.sniper_count),
+    gmgn_honeypot: securityCheck?.isHoneypot ?? false,
+    gmgn_owner_renounced: securityCheck?.ownerRenounced ?? null,
+    gmgn_renounced_mint: securityCheck?.renouncedMint ?? null,
+    gmgn_renounced_freeze: securityCheck?.renouncedFreeze ?? null,
+    gmgn_open_source: securityCheck?.openSource ?? null,
+    gmgn_buy_tax_pct: securityCheck?.buyTaxPct ?? null,
+    gmgn_sell_tax_pct: securityCheck?.sellTaxPct ?? null,
+    gmgn_rug_ratio_pct: securityCheck?.rugRatioPct ?? null,
+    gmgn_security_warnings: securityCheck?.warnings || [],
+    gmgn_security_reasons: securityCheck?.reasons || [],
     gmgn_kol_holding: holdersAnalysis.kolHolding,
     gmgn_smart_holding: holdersAnalysis.smartHolding,
     gmgn_smart_accumulating: holdersAnalysis.smartAccumulating,
@@ -568,30 +638,39 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
   stageCounts.s2 = s2.length;
   log("gmgn", `Stage2 info: ${s1.length} → ${s2.length} pass`);
 
-  // ── Stage 3: holders/traders enrichment (no hard filter) + Meteora pool ──
+  // ── Stage 3: holders/traders/security enrichment (no hard filter from holders/traders) + Meteora pool ──
   const s3 = [];
   const minTvl = num(g.minTvl ?? config.screening.minTvl ?? 0);
   for (const { token, info, infoCheck } of s2) {
     const mint = token.address;
     try {
-      const [holdersPayload, tradersPayload] = await Promise.all([
+      const [holdersPayload, tradersPayload, securityPayload] = await Promise.all([
         gmgnFetch("/v1/market/token_top_holders", {
           params: { chain: "sol", address: mint, limit: g.holdersLimit || 100, order_by: "amount_percentage", direction: "desc" },
         }),
         gmgnFetch("/v1/market/token_top_traders", {
           params: { chain: "sol", address: mint, limit: g.holdersLimit || 100, order_by: "profit", direction: "desc" },
         }),
+        gmgnFetch("/v1/token/security", {
+          params: { chain: "sol", address: mint },
+        }),
       ]);
       const holders = unwrapList(holdersPayload, ["list", "holders", "data"]);
       const traders = unwrapList(tradersPayload, ["list", "traders", "data"]);
+      const security = securityPayload?.data?.data || securityPayload?.data || securityPayload;
       const holdersCheck = analyzeHoldersAndTraders(holders, traders);
+      const securityCheck = analyzeTokenSecurity(security);
+      if (!securityCheck.passed) {
+        filtered.push({ stage: 3, name: token.symbol || mint, reason: `security: ${securityCheck.reasons.join(", ")}` });
+        continue;
+      }
 
       const topPools = await fetchTopMeteoraDlmmPoolsForMint(mint, minTvl, 2);
       if (topPools.length === 0) {
         filtered.push({ stage: 3, name: token.symbol || mint, reason: `no SOL DLMM pool above tvl>${minTvl}` });
         continue;
       }
-      s3.push({ token, info, infoCheck, holdersCheck, topPools });
+      s3.push({ token, info, infoCheck, holdersCheck, securityCheck, topPools });
     } catch (error) {
       log("gmgn", `Stage3 skip ${token.symbol || mint}: ${error.message}`);
       filtered.push({ stage: 3, name: token.symbol || mint, reason: error.message });
@@ -632,7 +711,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
 
   // ── Stage 5: pick best pool ───────────────────────────────────────────────
   const pools = [];
-  for (const { token, info, infoCheck, holdersCheck, topPools, indicatorSignal } of s4) {
+  for (const { token, info, infoCheck, holdersCheck, securityCheck, topPools, indicatorSignal } of s4) {
     if (pools.length >= limit) break;
     const mint = token.address;
     try {
@@ -642,7 +721,7 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
         continue;
       }
       const security = {};
-      const candidate = condenseGmgnCandidate({ token, pool, poolDetail, security, info, infoAnalysis: infoCheck, holdersAnalysis: holdersCheck, indicatorSignal });
+      const candidate = condenseGmgnCandidate({ token, pool, poolDetail, security, securityCheck, info, infoAnalysis: infoCheck, holdersAnalysis: holdersCheck, indicatorSignal });
       if (!candidate.pool || !candidate.base?.mint) {
         filtered.push({ stage: 5, name: token.symbol || mint, reason: "incomplete pool mapping" });
         continue;
@@ -718,6 +797,22 @@ export function formatGmgnCandidateForPrompt(p) {
     if (parts) indLine = `\n  Indicators ${interval}: ${parts}`;
   }
 
+  let securityLine = "";
+  const secParts = [];
+  if (p.gmgn_honeypot) secParts.push("honeypot=YES");
+  if (p.gmgn_owner_renounced === true) secParts.push("owner_renounced");
+  if (p.gmgn_owner_renounced === false) secParts.push("owner_NOT_renounced");
+  if (p.gmgn_renounced_mint === true) secParts.push("mint_renounced");
+  if (p.gmgn_renounced_mint === false) secParts.push("mint_NOT_renounced");
+  if (p.gmgn_renounced_freeze === true) secParts.push("freeze_renounced");
+  if (p.gmgn_renounced_freeze === false) secParts.push("freeze_NOT_renounced");
+  if (p.gmgn_open_source === true) secParts.push("open_source");
+  if (p.gmgn_buy_tax_pct != null && p.gmgn_buy_tax_pct > 0) secParts.push(`buy_tax=${p.gmgn_buy_tax_pct}%`);
+  if (p.gmgn_sell_tax_pct != null && p.gmgn_sell_tax_pct > 0) secParts.push(`sell_tax=${p.gmgn_sell_tax_pct}%`);
+  if (p.gmgn_rug_ratio_pct != null && p.gmgn_rug_ratio_pct > 0) secParts.push(`rug_ratio=${p.gmgn_rug_ratio_pct}%`);
+  if (p.gmgn_sniper_count != null && p.gmgn_sniper_count > 0) secParts.push(`sniper_count=${p.gmgn_sniper_count}`);
+  if (secParts.length) securityLine = `\n  Security: ${secParts.join(" | ")}`;
+
   const header = [sym, launchpad, age, mcap, binStep].filter(Boolean).join(" | ");
   const pool = [tvl, feeTvl, vol, volatility, ath].filter(Boolean).join(" | ");
   const risk = [top10, dev, bot, fresh, bundler].filter(Boolean).join(" | ");
@@ -730,6 +825,7 @@ export function formatGmgnCandidateForPrompt(p) {
     traction ? `  Traction: ${traction}` : null,
     kolLine || null,
     dumpKolLine || null,
+    securityLine || null,
     indLine || null,
   ].filter(Boolean).join("\n");
 }
