@@ -1,5 +1,7 @@
 {
     "_changelog":  {
+                       "_note_perf_s4parallel":  "2026-06-02 screening cycle bottleneck fix. Stage 4 in GMGN was sequential for-loop awaiting checkBounceSetup per candidate — 01:50 cycle took 38.7s because CUM got 504 (~5s) and a second candidate took 33s for fresh compute. With 3 candidates that's 38-100s of blocking before LLM even starts. Fix: parallelize Stage 4 with Promise.allSettled + 8s AbortController timeout in fetchChartIndicatorsForMint. Worst case for 3 candidates now = max(8s) = 8s instead of sum. Also keeps bot resilient to chart-indicators API hanging.",
+                       "perf_s4parallel":  "tools/gmgn.js Stage 4 — for/await loop → Promise.allSettled. tools/chart-indicators.js fetchChartIndicatorsForMint — added AbortController with 8s timeoutMs default",
                        "_note_lossfix":  "2026-05-25 Stake-SOL analysis: 6h close at -$1.40 left $8.30 unclaimed fees on table; ALL winners cut at 0.01-3.38% by too-tight trailing. Root cause: positionSizePct=0.90 deployed 0.70 SOL single position — one loss hits hard, trailing fires at 1.5% drop on large position, winners can't compound. Fix: smaller positions + wider trail + looser stop.",
                        "lossfix_sizing":  "positionSizePct: 0.90 → 0.40 — 2-3 smaller positions instead of one giant bet; allows trailing window to breathe",
                        "lossfix_trail":  "trailingTriggerPct: 1.5 → 4.0, trailingDropPct: 0.7 → 2.0 — let winners run past micro-rallies before locking gains",

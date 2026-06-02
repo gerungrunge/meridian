@@ -240,6 +240,7 @@ export async function fetchChartIndicatorsForMint(
     candles = config.indicators.candles ?? DEFAULT_CANDLES,
     rsiLength = config.indicators.rsiLength ?? 2,
     refresh = false,
+    timeoutMs = 8000,
   } = {},
 ) {
   const normalizedInterval = String(interval || "15_MINUTE").trim().toUpperCase();
@@ -250,9 +251,22 @@ export async function fetchChartIndicatorsForMint(
   });
   if (refresh) search.set("refresh", "1");
 
-  const res = await fetch(`${getApiBase()}/chart-indicators/${mint}?${search.toString()}`, {
-    headers: getHeaders(),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(`${getApiBase()}/chart-indicators/${mint}?${search.toString()}`, {
+      headers: getHeaders(),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`chart indicators timeout (${timeoutMs}ms)`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
   const text = await res.text().catch(() => "");
   let payload = {};
   try {

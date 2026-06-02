@@ -600,23 +600,29 @@ export async function discoverGmgnPools({ limit = 10 } = {}) {
   stageCounts.s3 = s3.length;
   log("gmgn", `Stage3 pool: ${s2.length} → ${s3.length} pass`);
 
-  // ── Stage 4: Meridian chart indicators ────────────────────────────────────
+  // ── Stage 4: Meridian chart indicators (parallel, per-mint timeout in fetchChartIndicatorsForMint) ──
   const s4 = [];
   if (g.indicatorFilter !== false) {
-    for (const entry of s3) {
-      const mint = entry.token.address;
-      let indicatorCheck;
-      try {
-        indicatorCheck = await checkBounceSetup(mint);
-      } catch (error) {
-        log("gmgn", `Stage4 indicator unavailable for ${entry.token.symbol || mint}: ${error.message} — skip filter`);
-        indicatorCheck = { passed: true, reasons: [] };
-      }
-      if (!indicatorCheck.passed) {
-        filtered.push({ stage: 4, name: entry.token.symbol || mint, reason: indicatorCheck.reasons.join(", ") });
+    const stage4Results = await Promise.allSettled(
+      s3.map(async (entry) => {
+        const mint = entry.token.address;
+        try {
+          const signal = await checkBounceSetup(mint);
+          return { entry, signal };
+        } catch (error) {
+          log("gmgn", `Stage4 indicator unavailable for ${entry.token.symbol || mint}: ${error.message} — skip filter`);
+          return { entry, signal: { passed: true, reasons: [] } };
+        }
+      }),
+    );
+    for (const result of stage4Results) {
+      if (result.status !== "fulfilled") continue;
+      const { entry, signal } = result.value;
+      if (!signal.passed) {
+        filtered.push({ stage: 4, name: entry.token.symbol || entry.token.address, reason: signal.reasons.join(", ") });
         continue;
       }
-      s4.push({ ...entry, indicatorSignal: indicatorCheck.signal });
+      s4.push({ ...entry, indicatorSignal: signal.signal });
     }
   } else {
     s4.push(...s3);
