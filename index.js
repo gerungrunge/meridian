@@ -667,7 +667,7 @@ STEPS:
 2. Pick the best candidate only if it has real conviction from narrative quality, smart wallets, and pool metrics. If the list has only one pool and it lacks narrative or smart-wallet confirmation, skip the cycle.
 3. If a pool qualifies, call deploy_position (active_bin is pre-fetched above — no need to call get_active_bin).
    strategy = ${config.strategy.strategy} (always use this, never change it).
-   bins_below = round(${config.strategy.minBinsBelow} + (candidate volatility/5)*${config.strategy.maxBinsBelow - config.strategy.minBinsBelow}) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}].
+   bins_below = round(${config.strategy.minBinsBelow} + (candidate volatility/5)*${config.strategy.maxBinsBelow - config.strategy.minBinsBelow}) clamped to [${config.strategy.minBinsBelow},${config.strategy.maxBinsBelow}], then if volatility > ${config.strategy.highVolatilityThreshold ?? 3.5} multiply by ${config.strategy.highVolatilityBinsBoost ?? 1.25} and re-clamp.
    pass deploy_position.volatility = the candidate volatility value.
    bins_above = 0. Single-side SOL only: set amount_y, keep amount_x = 0.
 4. Report in this exact format (no tables, no extra sections):
@@ -1039,7 +1039,13 @@ function computeBinsBelow(volatility) {
   }
   const lo = config.strategy.minBinsBelow;
   const hi = config.strategy.maxBinsBelow;
-  return Math.max(lo, Math.min(hi, Math.round(lo + (parsedVolatility / 5) * (hi - lo))));
+  const base = lo + (parsedVolatility / 5) * (hi - lo);
+  // Adaptive range width: high-vol tokens pump past the upper bin too quickly,
+  // causing Rule 3 to fire before fees accrue. Boost bins for vol > threshold.
+  const threshold = config.strategy.highVolatilityThreshold ?? 3.5;
+  const boost = config.strategy.highVolatilityBinsBoost ?? 1.25;
+  const scaled = parsedVolatility > threshold ? base * boost : base;
+  return Math.max(lo, Math.min(hi, Math.round(scaled)));
 }
 
 // ═══════════════════════════════════════════

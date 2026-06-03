@@ -221,6 +221,12 @@ export const config = {
     minBinsBelow: strategyMinBinsBelow,
     maxBinsBelow: strategyMaxBinsBelow,
     defaultBinsBelow: strategyDefaultBinsBelow,
+    // Adaptive range width: when pool volatility exceeds the threshold, multiply
+    // bins_below by the multiplier. Addresses the "Rule 3 too aggressive" pattern
+    // where high-vol tokens pump past the upper bin within minutes, forcing exits
+    // before the position has time to earn fees.
+    highVolatilityThreshold:   u.highVolatilityThreshold   ?? 3.5,
+    highVolatilityBinsBoost:   u.highVolatilityBinsBoost   ?? 1.25, // +25% (mid of 20-30% range)
   },
 
   // ─── Scheduling ─────────────────────────

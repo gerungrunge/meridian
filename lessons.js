@@ -92,6 +92,13 @@ function buildSignalSnapshot(perf) {
  * @param {number} perf.minutes_in_range  - Total minutes position was in range
  * @param {number} perf.minutes_held      - Total minutes position was held
  * @param {string} perf.close_reason   - Why it was closed
+ * @param {number} [perf.peak_pnl_pct]  - Highest PnL % seen during hold (trailing peak)
+ * @param {number} [perf.close_active_bin] - Active bin ID at close
+ * @param {number} [perf.close_upper_bin]  - Upper bin ID at close
+ * @param {number} [perf.close_lower_bin]  - Lower bin ID at close
+ * @param {number} [perf.bin_distance_above_upper] - Active bin minus upper bin at close (positive = above range)
+ * @param {boolean} [perf.trailing_active] - Whether trailing TP had armed before close
+ * @param {number} [perf.minutes_oor]    - Total minutes position was out of range
  */
 export async function recordPerformance(perf) {
   const data = load();

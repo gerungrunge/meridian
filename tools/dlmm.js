@@ -1792,6 +1792,15 @@ export async function closePosition({ position_address, reason }) {
             minutes_held: minutesHeld,
             close_reason: reason || "agent decision",
             signal_snapshot: signalSnapshot,
+            peak_pnl_pct: tracked.peak_pnl_pct ?? null,
+            close_active_bin: livePosition?.active_bin ?? null,
+            close_upper_bin: livePosition?.upper_bin ?? null,
+            close_lower_bin: livePosition?.lower_bin ?? null,
+            bin_distance_above_upper: (livePosition?.active_bin != null && livePosition?.upper_bin != null)
+              ? livePosition.active_bin - livePosition.upper_bin
+              : null,
+            trailing_active: !!tracked.trailing_active,
+            minutes_oor: minutesOOR,
           });
 
           appendDecision({
@@ -2060,6 +2069,10 @@ export async function closePosition({ position_address, reason }) {
         tracked,
       });
 
+      const closeActiveBin = cachedPos?.active_bin ?? tracked?.bin_range?.active_at_deploy ?? null;
+      const closeUpperBin  = cachedPos?.upper_bin  ?? tracked?.bin_range?.max ?? null;
+      const closeLowerBin  = cachedPos?.lower_bin  ?? tracked?.bin_range?.min ?? null;
+
       await recordPerformance({
         position: position_address,
         pool: poolAddress,
@@ -2079,6 +2092,15 @@ export async function closePosition({ position_address, reason }) {
         minutes_held: minutesHeld,
         close_reason: reason || "agent decision",
         signal_snapshot: signalSnapshot,
+        peak_pnl_pct: tracked.peak_pnl_pct ?? null,
+        close_active_bin: closeActiveBin,
+        close_upper_bin: closeUpperBin,
+        close_lower_bin: closeLowerBin,
+        bin_distance_above_upper: (closeActiveBin != null && closeUpperBin != null)
+          ? closeActiveBin - closeUpperBin
+          : null,
+        trailing_active: !!tracked.trailing_active,
+        minutes_oor: minutesOOR,
       });
 
       appendDecision({
