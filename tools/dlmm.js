@@ -815,6 +815,7 @@ export async function deployPosition({
           active_bin: activeBin.binId,
           initial_value_usd,
           signal_snapshot: signalSnapshot,
+          high_vol_polling: Number(normalizedVolatility) > (config.management.highVolPollingThreshold ?? 5),
         });
       }
 
@@ -953,6 +954,7 @@ export async function deployPosition({
       active_bin: activeBin.binId,
       initial_value_usd,
       signal_snapshot: signalSnapshot,
+      high_vol_polling: Number(normalizedVolatility) > (config.management.highVolPollingThreshold ?? 5),
     });
 
     appendDecision({

@@ -32,6 +32,10 @@ const LESSONS_FILE = dataPath("lessons.json");
 
 function classify(reason) {
   const r = String(reason || "").toLowerCase();
+  // "Trailing TP: Stop loss: PnL -X% <= -10%" — close was routed through the
+  // trailing TP handler but the actual trigger was stop loss. Classify as
+  // stop_loss for accurate EV accounting.
+  if (r.includes("trailing tp") && r.includes("stop loss")) return "stop_loss";
   if (r.includes("pumped far above range")) return "rule3";
   if (r.includes("trailing tp")) return "trailing_tp";
   if (r.includes("stop loss")) return "stop_loss";

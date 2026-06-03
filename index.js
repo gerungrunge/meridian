@@ -96,6 +96,7 @@ let _managementBusy = false; // prevents overlapping management cycles
 let _screeningBusy = false;  // prevents overlapping screening cycles
 let _screeningLastTriggered = 0; // epoch ms — prevents management from spamming screening
 let _pollTriggeredAt = 0; // epoch ms — cooldown for poller-triggered management
+let _fastPollTriggeredAt = 0; // epoch ms — cooldown for fast-poll direct close (15s, STOP_LOSS only)
 const _peakConfirmTimers = new Map();
 const _trailingDropConfirmTimers = new Map();
 const TRAILING_PEAK_CONFIRM_DELAY_MS = 15_000;
@@ -202,6 +203,7 @@ async function maybeRunMissedBriefing() {
 function stopCronJobs() {
   for (const task of _cronTasks) task.stop();
   if (_cronTasks._pnlPollInterval) clearInterval(_cronTasks._pnlPollInterval);
+  if (_cronTasks._fastPollInterval) clearInterval(_cronTasks._fastPollInterval);
   _cronTasks = [];
 }
 
@@ -873,10 +875,77 @@ Summarize the current portfolio health, total fees earned, and performance of al
     }
   }, 30_000);
 
+  // Fast PnL poller for high-volatility positions — 3x faster than the
+  // default 30s poller. Addresses catastrophic-rug detection lag (SAOS-SOL
+  // 2026-05-28: PnL went from normal to -93% between two 30s polls, causing
+  // $17.52 loss on a single position). For STOP_LOSS exits, bypasses the
+  // LLM and calls closePosition directly to avoid the 30-60s agent roundtrip.
+  let _fastPollBusy = false;
+  const fastPollIntervalMs = (config.management.highVolPollingIntervalSec ?? 10) * 1000;
+  const fastPollInterval = setInterval(async () => {
+    if (_managementBusy || _screeningBusy || _pnlPollBusy || _fastPollBusy) return;
+    const highVolPositions = getTrackedPositions(true).filter((p) => p.high_vol_polling);
+    if (highVolPositions.length === 0) return;
+    _fastPollBusy = true;
+    try {
+      const result = await getMyPositions({ force: true, silent: true }).catch(() => null);
+      if (!result?.positions?.length) return;
+      const highVolSet = new Set(highVolPositions.map((p) => p.position));
+      for (const p of result.positions) {
+        if (!highVolSet.has(p.position)) continue;
+
+        const exit = updatePnlAndCheckExits(p.position, p, config.management);
+        if (!exit) continue;
+
+        // Fast path: STOP_LOSS for high-vol positions → close directly, no LLM.
+        // This is the catastrophic-rug case where we cannot afford 30-60s of
+        // LLM roundtrip — the position may have lost 50%+ in that window.
+        if (exit.action === "STOP_LOSS" && p.pnl_pct != null && p.pnl_pct <= (config.management.stopLossPct ?? -10)) {
+          // Short cooldown (15s) to allow retry if first close tx fails.
+          const fastCooldownMs = 15_000;
+          const sinceLastFast = Date.now() - _fastPollTriggeredAt;
+          if (sinceLastFast < fastCooldownMs) {
+            log("state", `[Fast poll] STOP_LOSS ${p.pair} ${p.pnl_pct.toFixed(2)}% — cooldown (${Math.round((fastCooldownMs - sinceLastFast) / 1000)}s left)`);
+            break;
+          }
+          _fastPollTriggeredAt = Date.now();
+          log("state", `[Fast poll] STOP_LOSS ${p.pair} ${p.pnl_pct.toFixed(2)}% — direct close (bypassing LLM)`);
+          closePosition({ position_address: p.position, reason: `Fast poll STOP_LOSS: ${exit.reason}` })
+            .then((r) => {
+              if (r?.success) {
+                log("state", `[Fast poll] ✓ Closed ${p.pair} (${r.pnl_pct?.toFixed(2) ?? "?"}%, $${r.pnl_usd?.toFixed(2) ?? "?"})`);
+              } else {
+                log("state_warn", `[Fast poll] Close failed for ${p.pair}: ${r?.error ?? "unknown"} — falling back to management cycle`);
+                runManagementCycle({ silent: true }).catch((e) => log("cron_error", `Fast poll fallback management failed: ${e.message}`));
+              }
+            })
+            .catch((e) => {
+              log("state_warn", `[Fast poll] Close exception for ${p.pair}: ${e.message} — falling back to management cycle`);
+              runManagementCycle({ silent: true }).catch((e2) => log("cron_error", `Fast poll fallback management failed: ${e2.message}`));
+            });
+          break;
+        }
+
+        // Other exits (trailing TP, IL, decay, etc.) — fall back to regular management.
+        const cooldownMs = config.schedule.managementIntervalMin * 60 * 1000;
+        const sinceLastTrigger = Date.now() - _pollTriggeredAt;
+        if (sinceLastTrigger >= cooldownMs) {
+          _pollTriggeredAt = Date.now();
+          log("state", `[Fast poll] Exit alert: ${p.pair} — ${exit.reason} — triggering management`);
+          runManagementCycle({ silent: true }).catch((e) => log("cron_error", `Fast poll triggered management failed: ${e.message}`));
+        }
+        break;
+      }
+    } finally {
+      _fastPollBusy = false;
+    }
+  }, fastPollIntervalMs);
+
   _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog];
-  // Store interval ref so stopCronJobs can clear it
+  // Store interval refs so stopCronJobs can clear them
   _cronTasks._pnlPollInterval = pnlPollInterval;
-  log("cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);
+  _cronTasks._fastPollInterval = fastPollInterval;
+  log("cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m, fast poll every ${config.management.highVolPollingIntervalSec ?? 10}s for high-vol positions`);
 }
 
 // ═══════════════════════════════════════════

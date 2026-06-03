@@ -71,6 +71,7 @@ export function trackPosition({
   signal_snapshot = null,
   entry_volume = null,
   entry_price = null,
+  high_vol_polling = false,
 }) {
   const state = load();
   state.positions[position] = {
@@ -112,10 +113,15 @@ export function trackPosition({
     peak_volume: entry_volume ?? null,
     entry_active_bin: active_bin ?? null,
     entry_price: entry_price ?? null,
+    // Fast PnL polling — set by deployer when volatility > threshold.
+    // Fast poll processes this position every highVolPollingIntervalSec (10s)
+    // in addition to the default 30s poller. Addresses catastrophic-rug
+    // detection lag where 30s polling misses fast token crashes.
+    high_vol_polling: !!high_vol_polling,
   };
   pushEvent(state, { action: "deploy", position, pool_name: pool_name || pool });
   save(state);
-  log("state", `Tracked new position: ${position} in pool ${pool}`);
+  log("state", `Tracked new position: ${position} in pool ${pool}${high_vol_polling ? " [FAST PnL POLL]" : ""}`);
 }
 
 /**

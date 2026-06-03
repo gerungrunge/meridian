@@ -211,6 +211,13 @@ export const config = {
     minHoldMinutesForTrail: u.minHoldMinutesForTrail ?? 30,  // position must be held X min before trail can arm
     minPeakPctForTrail:     u.minPeakPctForTrail     ?? 1.5, // peak PnL must exceed X% before trail can arm (soft floor below trailingTriggerPct)
     pnlSanityMaxDiffPct:   u.pnlSanityMaxDiffPct   ?? 5,    // max allowed diff between reported and derived pnl % before ignoring a tick
+    // High-vol PnL polling: positions with deploy-time volatility above the
+    // threshold are polled on a faster cadence (highVolPollingIntervalSec)
+    // in addition to the default 30s poller. Addresses catastrophic-rug
+    // detection lag (SAOS-SOL 2026-05-28: PnL went from normal to -93%
+    // between two 30s polls). Default 10s — 3x faster detection.
+    highVolPollingThreshold:    u.highVolPollingThreshold    ?? 5,    // volatility > 5 → fast poll
+    highVolPollingIntervalSec:  u.highVolPollingIntervalSec  ?? 10,   // poll every 10s
     // SOL mode — positions, PnL, and balances reported in SOL instead of USD
     solMode:               u.solMode               ?? false,
   },
