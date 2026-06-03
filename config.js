@@ -203,6 +203,12 @@ export const config = {
     trailingTakeProfit:    u.trailingTakeProfit    ?? true,
     trailingTriggerPct:    u.trailingTriggerPct    ?? 3,    // activate trailing at X% PnL
     trailingDropPct:       u.trailingDropPct       ?? 1.5,  // close when drops X% from peak
+    // Quick profit lock-in — close at small +Pnl% after position has matured.
+    // "Small but frequent" strategy: many +2% wins > rare +5% wins that sometimes
+    // turn into -10% losses. Fires BEFORE trailing TP (3% trigger) so we lock
+    // in gains earlier. minHoldMinutesForQuickProfit gates against pump-then-dump.
+    quickProfitPct:           u.quickProfitPct           ?? 2,    // close at +X% PnL
+    quickProfitMinHoldMin:    u.quickProfitMinHoldMin    ?? 30,   // position must age X min
     // Trailing guards — require position to mature before trailing TP can arm.
     // Prevents activating on initial spike-then-fade patterns (e.g. peak 0.5%
     // at minute 2 then crash). trailingTriggerPct is the real activation

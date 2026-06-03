@@ -1034,6 +1034,23 @@ function getDeterministicCloseRule(position, managementConfig) {
   if (!pnlSuspect && position.pnl_pct != null && position.pnl_pct >= managementConfig.takeProfitPct) {
     return { action: "CLOSE", rule: 2, reason: "take profit" };
   }
+  // Quick profit lock-in — close at +X% PnL after position has matured.
+  // Fires BEFORE Rule 3/4 (OOR/pumped) so we lock in small gains instead of
+  // waiting for the position to go out of range. "Small but frequent" beats
+  // "wait for big, end up with loss". minHoldMin gates against pump-then-dump.
+  if (
+    !pnlSuspect &&
+    position.pnl_pct != null &&
+    managementConfig.quickProfitPct != null &&
+    position.pnl_pct >= managementConfig.quickProfitPct &&
+    (position.age_minutes ?? 0) >= (managementConfig.quickProfitMinHoldMin ?? 30)
+  ) {
+    return {
+      action: "CLOSE",
+      rule: 6,
+      reason: `Quick profit: PnL ${position.pnl_pct.toFixed(2)}% >= +${managementConfig.quickProfitPct}% after ${position.age_minutes}m hold`,
+    };
+  }
   if (
     position.active_bin != null &&
     position.upper_bin != null &&

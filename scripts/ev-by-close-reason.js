@@ -36,6 +36,7 @@ function classify(reason) {
   // trailing TP handler but the actual trigger was stop loss. Classify as
   // stop_loss for accurate EV accounting.
   if (r.includes("trailing tp") && r.includes("stop loss")) return "stop_loss";
+  if (r.includes("quick profit")) return "quick_profit";
   if (r.includes("pumped far above range")) return "rule3";
   if (r.includes("trailing tp")) return "trailing_tp";
   if (r.includes("stop loss")) return "stop_loss";
@@ -60,13 +61,14 @@ function getBinDistance(r) {
 }
 
 const FAMILY_LABEL = {
-  rule3:       "Rule 3 (pumped far above range)",
-  trailing_tp: "Trailing TP",
-  stop_loss:   "Stop loss",
-  take_profit: "Take profit",
-  oor:         "OOR",
-  low_yield:   "Low yield",
-  other:       "Other",
+  rule3:        "Rule 3 (pumped far above range)",
+  quick_profit: "Quick profit",
+  trailing_tp:  "Trailing TP",
+  stop_loss:    "Stop loss",
+  take_profit:  "Take profit",
+  oor:          "OOR",
+  low_yield:    "Low yield",
+  other:        "Other",
 };
 
 function summarize(rows) {
