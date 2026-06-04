@@ -168,6 +168,55 @@ export function recordPoolDeploy(poolAddress, deployData) {
     log("pool-memory", `Cooldown set for ${entry.name} until ${cooldownUntil} (low yield close)`);
   }
 
+  // P1: Net-PnL redeploy gate — block redeploy if last close had net loss.
+  // Replaces the old fee-based gate which allowed redeploy into pools that
+  // earned fees but lost PnL (e.g. DATBIHGAH: fees 5.55% but PnL -14.95%).
+  // Threshold configurable: 0 = block on any net loss; -2 = softer (allow if
+  // loss <= 2%). Cooldown uses the standard repeatDeployCooldownHours.
+  if (
+    config.management.repeatDeployCooldownEnabled &&
+    deploy.pnl_pct != null &&
+    Number.isFinite(deploy.pnl_pct)
+  ) {
+    const minNetPnlPct = Number(config.management.repeatDeployCooldownMinNetPnlPct ?? 0);
+    if (deploy.pnl_pct < minNetPnlPct) {
+      const netLossHours = Math.max(1, Number(config.management.repeatDeployCooldownHours ?? 12));
+      const reason = `net loss ${deploy.pnl_pct.toFixed(2)}% < ${minNetPnlPct}% threshold`;
+      const poolCooldownUntil = setPoolCooldown(entry, netLossHours, reason);
+      log("pool-memory", `Cooldown set for ${entry.name} until ${poolCooldownUntil} (${reason})`);
+      if (entry.base_mint) {
+        const mintCooldownUntil = setBaseMintCooldown(db, entry.base_mint, netLossHours, reason);
+        if (mintCooldownUntil) {
+          log("pool-memory", `Base mint cooldown set for ${entry.base_mint.slice(0, 8)} until ${mintCooldownUntil} (${reason})`);
+        }
+      }
+    }
+  }
+
+  // P2: Catastrophic loss protection — single close at <= -12% (default)
+  // triggers a 7-day pool + token cooldown. Catches the "token rugged while
+  // in range" pattern (SAOS-SOL, DATBIHGAH, Fine) where stop loss lags and
+  // PnL drops to -12% to -15% in a single trade. -12% threshold chosen
+  // because -8% can occur from normal volatility, while -12% to -15%
+  // indicates structural pool change or rug.
+  if (
+    deploy.pnl_pct != null &&
+    Number.isFinite(deploy.pnl_pct) &&
+    deploy.pnl_pct <= (config.management.catastrophicLossPct ?? -12)
+  ) {
+    const cooldownDays = Math.max(1, Number(config.management.catastrophicLossCooldownDays ?? 7));
+    const cooldownHours = cooldownDays * 24;
+    const reason = `catastrophic loss ${deploy.pnl_pct.toFixed(2)}% <= ${config.management.catastrophicLossPct ?? -12}% (${cooldownDays}d cooldown)`;
+    const poolCooldownUntil = setPoolCooldown(entry, cooldownHours, reason);
+    log("pool-memory", `Cooldown set for ${entry.name} until ${poolCooldownUntil} (${reason})`);
+    if (entry.base_mint) {
+      const mintCooldownUntil = setBaseMintCooldown(db, entry.base_mint, cooldownHours, reason);
+      if (mintCooldownUntil) {
+        log("pool-memory", `Base mint cooldown set for ${entry.base_mint.slice(0, 8)} until ${mintCooldownUntil} (${reason})`);
+      }
+    }
+  }
+
   const oorTriggerCount = config.management.oorCooldownTriggerCount ?? 3;
   const oorCooldownHours = config.management.oorCooldownHours ?? 12;
   const recentDeploys = entry.deploys.slice(-oorTriggerCount);

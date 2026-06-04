@@ -190,6 +190,20 @@ export const config = {
     repeatDeployCooldownHours: u.repeatDeployCooldownHours ?? 12,
     repeatDeployCooldownScope: u.repeatDeployCooldownScope ?? "token", // pool | token | both
     repeatDeployCooldownMinFeeEarnedPct: u.repeatDeployCooldownMinFeeEarnedPct ?? u.repeatDeployCooldownMinFeeYieldPct ?? 0,
+    // Net-PnL redeploy gate (replaces fee-based gate for the loss prevention case).
+    // If last close had net pnl_pct < this threshold, redeploy is blocked for
+    // repeatDeployCooldownHours. Default 0 = block on ANY net loss. Set to -2
+    // for a softer gate (allow redeploy if loss <= 2%). This is the fix for
+    // the DATBIHGAH pattern (fees 5.55% but PnL -14.95% was allowed to redeploy).
+    repeatDeployCooldownMinNetPnlPct: u.repeatDeployCooldownMinNetPnlPct ?? 0,
+    // Catastrophic loss protection — any single close at or below this
+    // percentage triggers a 7-day pool + token cooldown. Catches the
+    // "token rugged while in range" pattern (SAOS-SOL, DATBIHGAH, Fine)
+    // where stop loss lags and PnL drops to -12% to -15% in a single trade.
+    // -12% threshold chosen because -8% can occur from normal volatility,
+    // while -12% to -15% indicates structural pool change or rug.
+    catastrophicLossPct:            u.catastrophicLossPct            ?? -12,
+    catastrophicLossCooldownDays:   u.catastrophicLossCooldownDays   ?? 7,
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
     stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
     takeProfitPct:         u.takeProfitPct         ?? u.takeProfitFeePct ?? 5,
