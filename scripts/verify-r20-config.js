@@ -4,7 +4,7 @@
  * Usage: node scripts/verify-r20-config.js
  */
 
-import("./config.js").then((m) => {
+import("../config.js").then((m) => {
   const c = m.config.management;
   console.log("netPnl gate: " + c.repeatDeployCooldownMinNetPnlPct);
   console.log("catastrophicPct: " + c.catastrophicLossPct);
